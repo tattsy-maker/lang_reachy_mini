@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""multilingual -- let Reachy answer in the language you spoke to it.
+
+Kokoro is already a multilingual model: the voices file that ships with it
+carries 54 voices across nine languages. What pinned the robot to English was
+configuration, not capability. Two things were missing:
+
+1. **Whisper was told the language instead of asked.** pipecat defaults its
+   MLX Whisper service to `language=EN` and passes that straight to
+   `mlx_whisper.transcribe`, which disables Whisper's own detection. Passing
+   `None` instead makes it detect, at no measurable cost -- detection happens
+   inside the transcribe call that was running anyway.
+
+2. **The detected language was thrown away.** pipecat stamps the *configured*
+   language onto the TranscriptionFrame, not the one Whisper found, so nothing
+   downstream could act on it. `MultilingualWhisperMLX` keeps it.
+
+`LanguageRouter` then switches the Kokoro voice to match. Voice and language
+have to move together: Kokoro voices are language-specific (`ff_siwis` is a
+French voice), and reading French text with an English voice produces
+confident nonsense rather than an error.
+
+**Why the guards matter more than the switching.** Whisper will happily detect
+a language from a cough. An unguarded router flips the robot into Japanese
+mid-conversation and it cannot be talked back out, because everything it hears
+after that is being transcribed under the wrong assumption. So a switch needs
+a transcript long enough to mean something, and a language we actually have a
+voice for.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import AsyncGenerator, NamedTuple
+
+import numpy as np
+from pipecat.frames.frames import (
+    ErrorFrame,
+    Frame,
+    TranscriptionFrame,
+    TTSUpdateSettingsFrame,
+)
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.services.kokoro.tts import KokoroTTSService
+from pipecat.services.settings import assert_given
+from pipecat.services.whisper.stt import WhisperSTTServiceMLX
+from pipecat.transcriptions.language import Language
+from pipecat.utils.time import time_now_iso8601
+
+log = logging.getLogger("multilingual")
+
+
+class Voice(NamedTuple):
+    """A language Kokoro can speak, and the voice to speak it with."""
+
+    language: Language
+    voice: str
+    name: str
+
+
+# The nine languages Kokoro v1.0 ships voices for, keyed by the code Whisper
+# reports. The voice is the default pick; every language has more than one
+# except French and Italian, which ship exactly one each.
+#
+# Kokoro's Portuguese is Brazilian, and its Chinese is Mandarin.
+LANGUAGES: dict[str, Voice] = {
+    "en": Voice(Language.EN, "af_heart", "English"),
+    "es": Voice(Language.ES, "ef_dora", "Spanish"),
+    "fr": Voice(Language.FR, "ff_siwis", "French"),
+    "it": Voice(Language.IT, "if_sara", "Italian"),
+    "pt": Voice(Language.PT, "pf_dora", "Portuguese"),
+    "hi": Voice(Language.HI, "hf_alpha", "Hindi"),
+}
+
+# Japanese and Chinese are deliberately absent, and it is not an oversight.
+#
+# Kokoro ships voices for both (`jf_alpha`, `zf_xiaobei` and six more), but
+# kokoro-onnx phonemizes every language through espeak, and espeak is not good
+# enough at either script to feed this model. Kokoro's CJK voices were trained
+# on misaki phonemes, which carry Japanese pitch accent and real word
+# segmentation; espeak produces neither.
+#
+# Measured here by speaking a sentence and transcribing it back (the same
+# round trip the other six pass at 96-100%):
+#
+#     ja  19% match, and 12.2s of audio for a 2.5s sentence -- it loops
+#     zh  41% match
+#
+# "Hello, I am a small robot on your desk" comes back in Japanese as "I read
+# my information. I read my information. I read my information." espeak
+# collapses the word for "small" (chiisana) to a single "s". It sounds fluent
+# and means nothing, which is the worst way for this to fail: the robot is
+# confidently talking gibberish and only a Japanese speaker would notice.
+#
+# The fix, if CJK is wanted, is misaki rather than a different TTS engine:
+# `create_stream(..., is_phonemes=True)` accepts phonemes directly, so
+# misaki[ja] / misaki[zh] can do the g2p that espeak cannot. Both pull in
+# heavier dependencies (pyopenjtalk, jieba), which is why this stops here.
+BROKEN_LANGUAGES: dict[str, Voice] = {
+    "ja": Voice(Language.JA, "jf_alpha", "Japanese"),
+    "zh": Voice(Language.ZH, "zf_xiaobei", "Chinese"),
+}
+
+# Whisper reports a base code, so "en" covers both Kokoro English variants.
+# Ask for a British voice with --voice bm_george and it stays British.
+SPOKEN_LANGUAGES = ", ".join(v.name for v in LANGUAGES.values())
+
+# Below this many characters a transcript is too short to trust a detection
+# from. "Yes", "hmm" and a cough all detect as something, and the something is
+# often not English.
+MIN_CHARS_TO_SWITCH = 12
+
+
+class MultilingualKokoro(KokoroTTSService):
+    """Kokoro with the two language codes espeak actually wants.
+
+    Kokoro phonemizes through espeak-ng, and espeak names French `fr-fr` and
+    Mandarin `cmn`. pipecat's language map hands it the bare codes `fr` and
+    `zh`, which espeak rejects outright:
+
+        RuntimeError: language "fr" is not supported by the espeak backend
+
+    That lands inside `run_tts`, which turns exceptions into an ErrorFrame
+    rather than raising, so the failure mode is a robot that goes silent for
+    those two languages while everything else keeps working. The other seven
+    (`en-us`, `en-gb`, `es`, `it`, `pt`, `hi`, `ja`) pass through unchanged.
+    """
+
+    ESPEAK_CODES = {Language.FR: "fr-fr", Language.ZH: "cmn"}
+
+    def language_to_service_language(self, language: Language) -> str:
+        """Map a language to the code espeak accepts."""
+        for lang, code in self.ESPEAK_CODES.items():
+            if str(getattr(language, "value", language)).lower().startswith(lang.value):
+                return code
+        return super().language_to_service_language(language)
+
+
+class MultilingualWhisperMLX(WhisperSTTServiceMLX):
+    """MLX Whisper with detection turned back on, and the result kept.
+
+    This overrides `run_stt` rather than wrapping it because the language
+    pipecat reports is baked into the middle of that method: it yields a
+    TranscriptionFrame carrying `self._settings.language`, and there is no hook
+    between the transcribe call and the frame. The two hallucination guards
+    below are carried over from pipecat's implementation deliberately; if that
+    upstream method grows a third, this needs it too.
+    """
+
+    async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
+        """Transcribe, detect the language, and report both."""
+        try:
+            import mlx_whisper
+
+            await self.start_processing_metrics()
+
+            audio_float = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+
+            model_path = assert_given(self._settings.model)
+            if model_path is None:
+                raise ValueError("Whisper model must be specified")
+            temperature = assert_given(self._settings.temperature)
+
+            # language=None is the whole point: it asks Whisper to detect
+            # rather than assume.
+            chunk = await asyncio.to_thread(
+                mlx_whisper.transcribe,
+                audio_float,
+                path_or_hf_repo=model_path,
+                temperature=temperature,
+                language=None,
+            )
+
+            text = ""
+            no_speech_prob_threshold = assert_given(self._settings.no_speech_prob)
+            for segment in chunk.get("segments", []):
+                # Carried over from pipecat: this exact compression ratio is a
+                # known hallucination signature.
+                if segment.get("compression_ratio", None) == 0.5555555555555556:
+                    continue
+                if (
+                    no_speech_prob_threshold is not None
+                    and segment.get("no_speech_prob", 0.0) < no_speech_prob_threshold
+                ):
+                    text += f"{segment.get('text', '')} "
+
+            await self.stop_processing_metrics()
+
+            if not text.strip():
+                return
+
+            detected = chunk.get("language")
+            language = None
+            if detected:
+                known = LANGUAGES.get(str(detected).lower())
+                language = known.language if known else None
+
+            log.debug("transcribed (%s): %s", detected or "unknown", text.strip())
+            await self._handle_transcription(text, True, language)
+            yield TranscriptionFrame(
+                text, self._user_id, time_now_iso8601(), language)
+
+        except Exception as e:
+            yield ErrorFrame(error=f"Unknown error occurred: {e}")
+
+
+class LanguageRouter(FrameProcessor):
+    """Point the Kokoro voice at whatever language was just heard.
+
+    Sits directly after the STT service, watches TranscriptionFrames, and
+    pushes a TTSUpdateSettingsFrame downstream when the language changes. Every
+    frame is passed through untouched.
+
+    The update travels the same path as the transcript, so it reaches the TTS
+    service ahead of the reply that transcript produces. The robot answers the
+    turn it just heard in the right voice, not the turn after.
+    """
+
+    def __init__(self, *, initial: str = "en", voice: str | None = None,
+                 enabled: bool = True):
+        super().__init__()
+        self._enabled = enabled
+        self._current = initial
+        # An explicit --voice overrides the default for the starting language
+        # only. Switching away and back returns to that override.
+        self._overrides = {initial: voice} if voice else {}
+
+    def voice_for(self, code: str) -> str:
+        return self._overrides.get(code) or LANGUAGES[code].voice
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if self._enabled and isinstance(frame, TranscriptionFrame):
+            await self._maybe_switch(frame)
+
+        await self.push_frame(frame, direction)
+
+    async def _maybe_switch(self, frame: TranscriptionFrame) -> None:
+        code = _base_code(frame.language)
+        if code is None or code == self._current:
+            return
+        if code not in LANGUAGES:
+            if code in BROKEN_LANGUAGES:
+                # Worth saying out loud: the robot is about to answer in
+                # English and the reason is not obvious from the outside.
+                log.info("heard %s, which Kokoro cannot speak intelligibly "
+                         "here; staying in %s",
+                         BROKEN_LANGUAGES[code].name, LANGUAGES[self._current].name)
+            return
+        if len(frame.text.strip()) < MIN_CHARS_TO_SWITCH:
+            log.debug("ignoring %s detected from a short utterance: %r",
+                      code, frame.text.strip())
+            return
+
+        spoken = LANGUAGES[code]
+        voice = self.voice_for(code)
+        log.info("switching speech to %s (voice %s)", spoken.name, voice)
+        self._current = code
+        await self.push_frame(TTSUpdateSettingsFrame(
+            delta=KokoroTTSService.Settings(
+                voice=voice, language=spoken.language)))
+
+
+def _base_code(language) -> str | None:
+    """Reduce a Language enum (or a raw code) to the base code LANGUAGES uses."""
+    if language is None:
+        return None
+    value = getattr(language, "value", language)
+    return str(value).split("-")[0].lower()

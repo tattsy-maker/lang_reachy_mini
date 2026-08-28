@@ -1,0 +1,21 @@
+# Secrets. .env holds a live Anthropic API key -- never commit it.
+# .env.example is the template and IS tracked.
+.env
+.env.*
+!.env.example
+
+# Virtualenvs (both the robot venv and voice/.venv)
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Runtime droppings from serve/agent runs
+*.log
+*.pid
+
+# macOS
+.DS_Store
