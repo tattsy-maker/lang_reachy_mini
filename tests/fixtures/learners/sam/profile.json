@@ -1,0 +1,9 @@
+{
+  "name": "Sam",
+  "target_language": "fr",
+  "level": "beginner",
+  "embedding": [-0.207, 0.334, -0.118, 0.052, 0.291, -0.366, 0.144, -0.089],
+  "sessions": 1,
+  "last_seen": "2026-08-31",
+  "tier": "guest"
+}

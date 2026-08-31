@@ -27,6 +27,9 @@ spec says *why*.
   `sg dialout`; `voice/.env` holds `ANTHROPIC_API_KEY` (and later
   `GOOGLE_API_KEY`).
 
+Each task keeps dated progress notes and learnings in `progress/<task-id>.md`,
+linked from its Progress log below.
+
 ## Status tracker
 
 Statuses: `todo` · `in progress` · `done` · `verified-on-metal` (done +
@@ -34,7 +37,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 
 | ID | Task | Depends on | Status | Last update |
 |----|------|-----------|--------|-------------|
-| T0 | Test harness & fixtures | — | todo | — |
+| T0 | Test harness & fixtures | — | done | 2026-08-31 |
 | T1 | Camera capture module | T0 | todo | — |
 | T2 | Face recognition core | T0, T1 | todo | — |
 | T3 | Learner store | T0 | todo | — |
@@ -82,7 +85,10 @@ one demo test drives `--say "hello"` through the real agent (marked
 tracker updated.
 
 **Progress log.**
-- —
+- 2026-08-31 — done; full suite green with no keys exported (7 passed, 1
+  clean skip). Found and fixed a real bug on the way: `agent.py --no-robot`
+  crashed under pipecat 1.6 (`tools=None` rejected by `LLMContext`).
+  Details and learnings in [progress/T0.md](progress/T0.md).
 
 ---
 

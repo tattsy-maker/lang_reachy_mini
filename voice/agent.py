@@ -581,10 +581,17 @@ async def run(args) -> None:
     # redundant and pipecat warns about it.
     tools = build_tools(robot) if robot else []
 
-    context = SafeLLMContext(
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}],
-        tools=tools or None,
-    )
+    # pipecat 1.6's LLMContext accepts a tools list or NOT_GIVEN but not None,
+    # so the no-robot path must omit the argument entirely.
+    if tools:
+        context = SafeLLMContext(
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}],
+            tools=tools,
+        )
+    else:
+        context = SafeLLMContext(
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}],
+        )
 
     # Turn-taking. In pipecat 1.6 both VAD and end-of-turn detection hang off
     # the user aggregator, not the transport.
