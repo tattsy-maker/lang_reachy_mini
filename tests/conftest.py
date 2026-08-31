@@ -24,6 +24,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -33,6 +34,11 @@ import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
 REPO = TESTS_DIR.parent
+
+# Tests import project modules (face.camera, later tutor.store) straight
+# from the repo root — nothing here is pip-installed.
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 FIXTURES = TESTS_DIR / "fixtures"
 REPORTS = TESTS_DIR / "reports"
 

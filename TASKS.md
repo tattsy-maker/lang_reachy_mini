@@ -38,7 +38,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | ID | Task | Depends on | Status | Last update |
 |----|------|-----------|--------|-------------|
 | T0 | Test harness & fixtures | — | done | 2026-08-31 |
-| T1 | Camera capture module | T0 | todo | — |
+| T1 | Camera capture module | T0 | done | 2026-08-31 |
 | T2 | Face recognition core | T0, T1 | todo | — |
 | T3 | Learner store | T0 | todo | — |
 | T4 | Tutor mode: briefing + memory tools | T0, T3 | todo | — |
@@ -120,7 +120,11 @@ from the Reachy camera (run once, note result in log).
 exercised once on hardware or explicitly logged as blocked.
 
 **Progress log.**
-- —
+- 2026-08-31 — done; file-source path fully tested (7 passed, 1 skip).
+  Face deps live in `voice/.venv` (OpenCV coexists with pipecat; verified).
+  Real-camera grab is **blocked**: altha lacks `video` group membership and
+  sudo needs a password — one-liner fix documented in
+  [progress/T1.md](progress/T1.md).
 
 ---
 
