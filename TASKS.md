@@ -40,7 +40,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T0 | Test harness & fixtures | — | done | 2026-08-31 |
 | T1 | Camera capture module | T0 | done | 2026-08-31 |
 | T2 | Face recognition core | T0, T1 | todo | — |
-| T3 | Learner store | T0 | todo | — |
+| T3 | Learner store | T0 | done | 2026-08-31 |
 | T4 | Tutor mode: briefing + memory tools | T0, T3 | todo | — |
 | T5 | Piper TTS + per-language engine routing | T0 | todo | — |
 | T6 | Mixed-language TTS assembly | T5 | todo | — |
@@ -187,7 +187,11 @@ family survives, guest gone.
 docstring (T4/T9/T10 build against it); tests green.
 
 **Progress log.**
-- —
+- 2026-08-31 — done; 10 tests green including the CLI-driven
+  enroll → notes → wipe E2E. API contract in the module docstring;
+  decisions (bookkeeping lives in `append_session`, corrupt profiles are
+  never wiped, collision slugs) in [progress/T3.md](progress/T3.md).
+  `/learners/` is now gitignored — learner data stays off the repo.
 
 ---
 

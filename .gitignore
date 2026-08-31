@@ -17,5 +17,10 @@ __pycache__/
 *.log
 *.pid
 
+# Learner data: names, face embeddings, session notes. Private by design
+# (spec section 8) -- never committed. The committed sample tree lives at
+# tests/fixtures/learners/, which this anchored pattern does not touch.
+/learners/
+
 # macOS
 .DS_Store
