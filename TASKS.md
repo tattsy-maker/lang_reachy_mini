@@ -1,0 +1,439 @@
+# Language Tutor — Task Breakdown & Progress Tracker
+
+Implementation tasks for [LANGUAGE_TUTOR_SPEC.md](LANGUAGE_TUTOR_SPEC.md).
+Read the spec first; this document says *what to build in what order*, the
+spec says *why*.
+
+## How to work a task (instructions to the implementing agent)
+
+- **One task per session.** Each task is scoped to be completable and
+  verifiable in a single coding-agent session. Do not start a task whose
+  dependencies are not `done` in the tracker below.
+- **Update the tracker.** When you start, set status to `in progress`. When
+  the task's Definition of Done is met, set `done` and add a dated line to
+  the task's Progress log. Never mark `done` with failing tests.
+- **Integration tests are part of the task**, not a follow-up. Every task
+  lands its tests under `tests/` and they must pass via
+  `tests/run.sh <task-id>` (created in T0). Tests that need hardware, big
+  models, or API keys must skip cleanly (with a printed reason) when the
+  prerequisite is absent — never fail on a machine that lacks it.
+- **Honest logs.** If something is verified only on the stub and not on the
+  robot, say so in the Progress log. The spec's history shows the gap
+  between "works on the stub" and "works on metal" is where bugs live.
+- **Environment facts** (see [CLAUDE.md](CLAUDE.md) for the full runbook):
+  two venvs (`./.venv` robot, `voice/.venv` agent); zenoh needs a pinned
+  address in this container (`--zenoh-listen tcp/0.0.0.0:7447` /
+  `zenoh://127.0.0.1:7447`); run audio under `sg audio`, serial under
+  `sg dialout`; `voice/.env` holds `ANTHROPIC_API_KEY` (and later
+  `GOOGLE_API_KEY`).
+
+## Status tracker
+
+Statuses: `todo` · `in progress` · `done` · `verified-on-metal` (done +
+exercised on the physical robot) · `cut` (dropped per spec).
+
+| ID | Task | Depends on | Status | Last update |
+|----|------|-----------|--------|-------------|
+| T0 | Test harness & fixtures | — | todo | — |
+| T1 | Camera capture module | T0 | todo | — |
+| T2 | Face recognition core | T0, T1 | todo | — |
+| T3 | Learner store | T0 | todo | — |
+| T4 | Tutor mode: briefing + memory tools | T0, T3 | todo | — |
+| T5 | Piper TTS + per-language engine routing | T0 | todo | — |
+| T6 | Mixed-language TTS assembly | T5 | todo | — |
+| T7 | Mixed-language STT hardening | T0 | todo | — |
+| T8 | Cloud speech mode (Gemini Live) | T4 | todo | — |
+| T9 | Conversational enrollment | T2, T3, T4 | todo | — |
+| T10 | Session lifecycle | T2, T4, T9 | todo | — |
+| T11 | Faire hardening & dress rehearsal | all | todo | — |
+
+Parallelizable from the start (after T0): T1, T3, T5, T7 have no
+dependencies on each other. The critical path is
+T0 → T1 → T2 → T9 → T10 → T11.
+
+---
+
+## T0 — Test harness & fixtures
+
+**Goal.** A `tests/` tree every later task plugs into, runnable without
+hardware, keys, or big models by default.
+
+**Build:**
+- `tests/run.sh [task-id]` — creates/uses a test venv, runs pytest for one
+  task's tests or all of them. Markers: `robot` (needs hardware), `models`
+  (downloads/loads big local models), `anthropic` / `google` (needs that
+  key), `audio` (needs a sound card). Unmarked tests must run anywhere.
+- Fixtures under `tests/fixtures/`: 4–6 face photos of at least 3 distinct
+  people (family photos or CC0 images — record provenance in a README
+  there), a short webcam-style video clip containing one of those faces,
+  and a `learners/` sample tree.
+- A pytest fixture that launches `controller.py --stub` serving on a pinned
+  zenoh address and tears it down with SIGINT (the repo's stub is the
+  hardware-free robot; SIGINT is mandatory, see CLAUDE.md).
+- A pytest fixture that runs `voice/agent.py --no-robot --say "..."` and
+  captures its log output (the repo's established way to drive a full agent
+  turn without a microphone).
+
+**E2E check.** `tests/run.sh` green on this machine with no keys exported;
+one demo test drives `--say "hello"` through the real agent (marked
+`anthropic`) and asserts a reply was synthesized.
+
+**Definition of Done.** Harness + fixtures merged; both demo tests pass;
+tracker updated.
+
+**Progress log.**
+- —
+
+---
+
+## T1 — Camera capture module
+
+**Goal.** Frames from the Reachy camera on demand, with a hardware-free
+substitute for tests.
+
+**Build:**
+- `face/camera.py`: `Camera.frames()` yielding OpenCV images at a capped
+  rate (~2 fps), sourced from (a) a V4L2 device index (the Reachy camera),
+  or (b) a video file / image directory — selected by argument. Handle the
+  camera being held by the vendor daemon: document/perform the
+  `set_media_released` handoff needed before opening it.
+- `face/check_camera.py`: prints device candidates, grabs one frame, saves
+  it to disk — the on-hardware smoke test.
+- Decide and record (in the task log) where face deps live: try
+  `voice/.venv` first; if OpenCV/onnxruntime conflict with pipecat's tree,
+  create `face/.venv` and note the interface boundary.
+
+**Integration tests.** Frames from the fixture video: correct shape, rate
+cap respected, clean iterator shutdown. A `robot`-marked test opens the
+real camera and asserts a non-black frame.
+
+**E2E check.** On this machine: `face/check_camera.py` saves a real frame
+from the Reachy camera (run once, note result in log).
+
+**Definition of Done.** File-source path fully tested; real-camera path
+exercised once on hardware or explicitly logged as blocked.
+
+**Progress log.**
+- —
+
+---
+
+## T2 — Face recognition core
+
+**Goal.** Enroll, match, and reject faces from images. No agent wiring yet.
+
+**Build:**
+- `face/recognize.py`: `embed(image) -> vector | None`,
+  `enroll(images) -> averaged vector`, `match(vector, known) ->
+  (name, score) | None` with the spec's ask-don't-guess band: a hard accept
+  threshold, a hard reject threshold, and an "unsure" band in between that
+  callers surface as a question. Largest-face-only selection when multiple
+  faces are in frame.
+- InsightFace `buffalo_l` via ONNX Runtime. **Verify and log which
+  execution provider actually runs** (GPU vs CPU) — this box's history
+  says never trust the reputation (see CLAUDE.md's CTranslate2 story). CPU
+  is acceptable if frame-rate holds at ~2 fps.
+- Model download pinned & cached; a `models`-marked test exercises it.
+
+**Integration tests.** With fixture photos: same person across two photos
+matches above threshold; different people fall below; a no-face image
+returns `None`; multi-face frame picks the largest. Thresholds asserted
+against measured fixture scores, not guessed.
+
+**E2E check.** A tiny script: enroll person A from 3 fixture photos, then
+identify them in the fixture video via `Camera` (T1) — prints name + score.
+
+**Definition of Done.** All tests green; execution provider + measured
+score distributions recorded in the Progress log (these numbers feed T9).
+
+**Progress log.**
+- —
+
+---
+
+## T3 — Learner store
+
+**Goal.** The `learners/` folder exactly as specced: profiles, notes,
+tiers, expiry. Pure filesystem, no AI, no robot.
+
+**Build:**
+- `tutor/store.py`: create/load/save `learners/<name>/profile.json`
+  (name, target language, level, embedding, session count, last-seen,
+  `tier: family|guest`), append-newest-first to `notes.md`, list learners,
+  delete learner ("forget me"), `wipe_guests()` deleting every guest
+  profile.
+- `tutor/wipe_guests.py` CLI for the end-of-day wipe.
+- Name collisions ("Maria" twice at the booth): disambiguate folder names,
+  keep display name.
+
+**Integration tests.** Full CRUD; tier semantics (wipe removes guests,
+never family); notes ordering; collision handling; corrupt-profile.json
+handled without crashing (skip + warn, don't delete).
+
+**E2E check.** Scripted: enroll → 2 sessions of notes → wipe → assert
+family survives, guest gone.
+
+**Definition of Done.** Store API stable and documented in the module
+docstring (T4/T9/T10 build against it); tests green.
+
+**Progress log.**
+- —
+
+---
+
+## T4 — Tutor mode: briefing + memory tools
+
+**Goal.** The agent becomes a tutor: it loads a learner, teaches at their
+level, and writes notes back.
+
+**Build (in `voice/agent.py` + new `voice/tutor.py`):**
+- `--learner <name>` flag: load profile + recent notes from the store (T3)
+  into the system prompt per the spec's briefing (target language from
+  profile, level-pitched, short sentences, correct-kindly).
+- New tools registered alongside the seven motion tools:
+  `save_session_notes`, `update_learner_level`. Notes format per spec
+  (Practiced / Struggled with / Wins / Next time).
+- Keep the existing latency rules (short sentences, move-and-speak in one
+  turn); booth model default noted but not hardcoded (`--model` exists).
+
+**Integration tests** (`anthropic`-marked, stub robot, `--say` driven):
+- A scripted 3-turn Spanish mini-lesson with a seeded intermediate profile:
+  assert the reply is mostly Spanish and references the seeded "Next time"
+  note.
+- A goodbye turn: assert `save_session_notes` fired and `notes.md` gained a
+  well-formed entry.
+- Level respect: beginner profile → reply contains English scaffolding.
+  (Assert via cheap checks — language of output, section headers in
+  notes — not LLM-judging.)
+
+**E2E check.** Live: `agent.py --learner maria --say "hola" --say "adiós"`
+against the stub; inspect the written notes by eye.
+
+**Definition of Done.** Briefing + both tools working end-to-end via
+`--say`; note in log whether a real-microphone run happened.
+
+**Progress log.**
+- —
+
+---
+
+## T5 — Piper TTS + per-language engine routing
+
+**Goal.** Russian and Mandarin speak, via Piper, routed automatically.
+(Spec's designated cut-if-late task.)
+
+**Build:**
+- `voice/piper_tts.py`: a pipecat TTS service wrapping Piper (local,
+  streaming into the existing pipeline), with chosen ru + zh voices.
+- Extend `multilingual.py`'s router: language → (engine, voice) map;
+  Kokoro keeps es/fr/it/pt/en/hi, Piper takes ru/zh. Extend the "only
+  languages with a voice count" guard to cover both engines.
+- `voice/verify_language.py`: the round-trip gate — synthesize a fixed
+  sentence set, transcribe back with the real Whisper service, print a
+  match % (the repo's established method; ≥90% ships, below falls back per
+  spec section 6).
+
+**Integration tests** (`models`-marked): router picks the right engine per
+language; Piper produces nonzero, sane-duration audio for ru and zh;
+round-trip gate runs and its report is written to `tests/reports/`.
+
+**E2E check.** `agent.py --language ru --say "..."` speaks Russian through
+the pipeline (stub robot, `audio`-marked or written to wav).
+
+**Definition of Done.** Both languages pass the ≥90% gate **or** the
+fallback decision (misaki / cut) is made and logged with the numbers.
+
+**Progress log.**
+- —
+
+---
+
+## T6 — Mixed-language TTS assembly
+
+**Goal.** One spoken reply containing two languages, seamlessly stitched.
+
+**Build:**
+- Span-tag convention in the system prompt (e.g. `[es]…[/es]` around
+  non-primary-language spans) — added to the tutor briefing (T4).
+- `voice/spans.py`: split tagged text into (language, text) spans;
+  untagged text uses the turn's primary language; malformed tags degrade to
+  plain text, never crash, never get spoken aloud as brackets.
+- Synthesis assembly: per-span engine/voice via the T5 router, stitched in
+  order into one utterance; timbre-adjacent voice pairs chosen and
+  documented.
+
+**Integration tests.** Span parser unit-tested hard (nesting, unclosed,
+empty, tag-only). `models`-marked: a tagged EN+ES sentence → audio →
+Whisper transcribes both halves correctly (the code-switched round trip);
+same for one pair involving Piper (EN+RU) if T5 shipped.
+
+**E2E check.** `--learner` + `--say "How do you say 'the library' in
+Spanish?"` produces a reply that audibly switches into Spanish for the
+answer (listen to the wav).
+
+**Definition of Done.** Round-trip passes for at least EN+ES and EN+FR;
+tag leakage (brackets spoken aloud) impossible by test.
+
+**Progress log.**
+- —
+
+---
+
+## T7 — Mixed-language STT hardening
+
+**Goal.** Code-switched *input* measured and improved; the gate that
+decides whether local mode meets the MUST or cloud mode is required.
+
+**Build:**
+- Bilingual priming: feed Whisper an initial prompt containing English +
+  the learner's target language each turn (wire into
+  `MultilingualWhisperMLX`).
+- Briefing addition (with T4): tell Claude transcripts may garble embedded
+  foreign words and to repair from context.
+- `voice/verify_codeswitch.py`: a test set of ~10 code-switched phrases per
+  pair (EN+each target language), synthesized via T6's assembly, fed
+  through the real Whisper service, scored on whether the embedded foreign
+  span survives recognizably. Report to `tests/reports/`, with and without
+  priming, so the priming's effect is measured not assumed.
+
+**Integration tests** (`models`-marked): the gate script runs end-to-end
+and writes its report; priming plumbing verified (the prompt actually
+reaches Whisper).
+
+**E2E check.** Speak one code-switched sentence at the real mic (or via the
+gate script) and read the transcript.
+
+**Definition of Done.** Per-pair scores recorded in the Progress log and in
+the spec's terms: which pairs are "seamless locally" vs "cloud mode
+required". No fixed pass bar — the deliverable is the honest number.
+
+**Progress log.**
+- —
+
+---
+
+## T8 — Cloud speech mode (Gemini Live)
+
+**Goal.** `--speech cloud` runs the whole session over Gemini 3.1 Flash
+Live with the same tools and memory; `--speech local` unchanged.
+
+**Build:**
+- Pipeline variant in `agent.py` using pipecat's `GeminiLiveLLMService`
+  (speech-to-speech): replaces STT + LLM + TTS stages; VAD/turn handling
+  per pipecat's s2s guidance; robot motion tools + T4 memory tools
+  re-registered on the Gemini service; tutor briefing passed as system
+  instruction; `GOOGLE_API_KEY` in `voice/.env`.
+- Mute-while-speaking strategy reviewed for full-duplex (Gemini supports
+  barge-in; decide and document whether the robot's self-hearing problem
+  allows enabling it with the booth mic).
+- `--speech` flag, default `local`.
+
+**Integration tests** (`google`-marked): a `--say`-driven turn in cloud
+mode gets an audio reply; a "nod twice" turn fires the motion tool on the
+stub robot; a goodbye turn writes notes via `save_session_notes`. Local
+mode's tests (T4) still green — the flag must not disturb the default path.
+
+**E2E check.** Live mic conversation in cloud mode including one
+code-switched sentence each way; log latency and subjective quality next to
+local mode's numbers.
+
+**Definition of Done.** Both modes selectable and passing their tests;
+cloud-mode tutoring tone spot-checked against the briefing (spec risk:
+"the prompt work doesn't automatically carry over").
+
+**Progress log.**
+- —
+
+---
+
+## T9 — Conversational enrollment
+
+**Goal.** A stranger becomes a guest learner entirely by voice.
+
+**Build:**
+- `enroll_new_learner` tool (spec section 4C): when the face module reports
+  "unknown", the briefing tells the tutor to ask for consent + name; the
+  tool captures 3–5 frames via T1/T2, averages the embedding, creates a
+  guest profile via T3.
+- The unsure band from T2 surfaces as "Maria, is that you?" rather than a
+  wrong greeting.
+- "Forget me" tool wired to the store's delete.
+
+**Integration tests.** With the face pipeline fed the fixture video and a
+scripted `--say` dialog (`anthropic`-marked): unknown face → consent
+question asked → name given → guest profile exists with an embedding →
+same video now matches. "No thanks" path creates nothing. "Forget me"
+deletes and is confirmed verbally.
+
+**E2E check.** A real person not in the store walks up to the robot and
+enrolls by voice; comes back and is greeted by name.
+
+**Definition of Done.** Scripted path fully tested; live path exercised
+once and logged.
+
+**Progress log.**
+- —
+
+---
+
+## T10 — Session lifecycle
+
+**Goal.** The booth loop with nobody touching a keyboard: watch → greet →
+tutor → save on walk-away → reset → watch.
+
+**Build:**
+- A session controller in the agent: idle state polls the camera (~2 fps)
+  via T1/T2; a stable face (≈2s, largest-face rule) starts a session with
+  that learner's briefing; face absent ~60s → force `save_session_notes`,
+  reset conversation context, robot to neutral, back to idle. Face
+  recognition paused during active conversation (spec: GPU is busy).
+- Clean interaction with SIGINT shutdown (robot home, media back — the
+  existing contract must survive).
+
+**Integration tests.** Drive the state machine with a synthetic
+frame/transcript timeline (no models needed): correct transitions,
+walk-away save fires exactly once, context is empty at next session start,
+two-visitors-in-a-row don't leak notes into each other's files.
+`anthropic`-marked: one full simulated visitor (fixture video + `--say`
+turns + disappearance) ends with a well-formed notes entry.
+
+**E2E check.** Live: two family members take turns at the robot without
+touching the keyboard; each gets their own greeting and their own notes.
+
+**Definition of Done.** State machine fully unit-tested; one live
+two-visitor run logged.
+
+**Progress log.**
+- —
+
+---
+
+## T11 — Faire hardening & dress rehearsal
+
+**Goal.** The booth checklist, executed. Mostly ops; small code.
+
+**Build / do:**
+- Booth mic: select the handheld/headset device via `--audio-device`,
+  verify mute-while-speaking behavior with it, document the exact device
+  name and startup line in CLAUDE.md.
+- One-command startup script (serve + agent, pinned zenoh, correct groups,
+  booth flags) and a printed startup checklist including the ~40s warmup
+  and the known cold-start `serve` retry.
+- Local-vs-cloud bake-off on venue-like conditions (hotspot): run T7/T8's
+  measured comparisons, record the booth-default decision.
+- Signage text (face recognition disclosure, mode disclosure per spec §8),
+  end-of-day wipe in the shutdown path, pre-enrolled family profiles with
+  real session history.
+- Full dress rehearsal: 5 consecutive visitors (mix of family, guest
+  enrollments, one "forget me", one language switch, one code-switched
+  exchange), all off the startup script.
+
+**Integration tests.** The startup script gets a `robot`-marked smoke test
+(comes up, agent reaches "ready", SIGINT cleans up). Everything else is the
+rehearsal checklist, checked off in the Progress log.
+
+**Definition of Done.** Dress rehearsal completed with every checklist item
+either passing or written up as a known issue with a booth workaround.
+
+**Progress log.**
+- —

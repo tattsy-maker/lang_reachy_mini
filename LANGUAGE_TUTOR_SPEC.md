@@ -439,6 +439,10 @@ Practical realities, from what we have already measured:
 
 ## 10. Build plan
 
+> The implementation-level breakdown of this plan — one task per coding
+> session, each with integration tests and a progress tracker — lives in
+> [TASKS.md](TASKS.md).
+
 Ordered so that every milestone is demoable on its own:
 
 | Milestone | Deliverable | Builds on |
