@@ -48,7 +48,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T8 | Cloud speech mode (Gemini Live) | T4 | in progress | 2026-08-31 |
 | T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
 | T10 | Session lifecycle | T2, T4, T9 | done | 2026-08-31 |
-| T11 | Faire hardening & dress rehearsal | all | todo | — |
+| T11 | Faire hardening & dress rehearsal | all | in progress | 2026-08-31 |
 
 Parallelizable from the start (after T0): T1, T3, T5, T7 have no
 dependencies on each other. The critical path is
@@ -490,4 +490,9 @@ rehearsal checklist, checked off in the Progress log.
 either passing or written up as a known issue with a booth workaround.
 
 **Progress log.**
-- —
+- 2026-08-31 — code and copy done: `start_booth.sh` (preflight → serve
+  with cold-start retry → session-mode agent on Haiku → SIGINT shutdown +
+  guest wipe), `booth/SIGNAGE.md` (all §8 disclosures, per-mode signs),
+  and tests (static anywhere; live smoke robot-marked, camera-gated).
+  Remaining items all need the user or the venue — the list with exact
+  unblock commands is in [progress/T11.md](progress/T11.md).
