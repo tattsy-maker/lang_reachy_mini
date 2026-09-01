@@ -39,7 +39,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 |----|------|-----------|--------|-------------|
 | T0 | Test harness & fixtures | — | done | 2026-08-31 |
 | T1 | Camera capture module | T0 | done | 2026-08-31 |
-| T2 | Face recognition core | T0, T1 | todo | — |
+| T2 | Face recognition core | T0, T1 | done | 2026-08-31 |
 | T3 | Learner store | T0 | done | 2026-08-31 |
 | T4 | Tutor mode: briefing + memory tools | T0, T3 | done | 2026-08-31 |
 | T5 | Piper TTS + per-language engine routing | T0 | todo | — |
@@ -157,7 +157,12 @@ identify them in the fixture video via `Camera` (T1) — prints name + score.
 score distributions recorded in the Progress log (these numbers feed T9).
 
 **Progress log.**
-- —
+- 2026-08-31 — done; 6 tests green. Provider is CPU (no CUDA EP in the
+  aarch64 onnxruntime wheel) and it's plenty: 95 ms/embed ≈ 10 fps vs the
+  2 fps need. Measured scores: same-person 0.66–0.98, different-person
+  ≤ 0.063; thresholds accept ≥ 0.45 / reject < 0.25 with the ask band
+  between. Video E2E: 12/12 frames matched at ≥ 0.775. Full numbers in
+  [progress/T2.md](progress/T2.md).
 
 ---
 
