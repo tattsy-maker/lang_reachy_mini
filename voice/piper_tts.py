@@ -34,7 +34,8 @@ import numpy as np
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.transcriptions.language import Language
 
-from multilingual import MultilingualKokoro, Voice
+from multilingual import LANGUAGES, MultilingualKokoro, Voice
+from spans import split_spans
 
 log = logging.getLogger("piper_tts")
 
@@ -71,10 +72,12 @@ class DualEngineTTS(MultilingualKokoro):
         self._piper_langs = piper_available(voices_dir)
         self._piper_voices: dict[str, object] = {}
 
-    def _piper_code(self) -> str | None:
+    def _current_code(self) -> str:
         lang = self._settings.language
-        code = str(getattr(lang, "value", lang) or "").split("-")[0].lower()
-        return code if code in self._piper_langs else None
+        return str(getattr(lang, "value", lang) or "en").split("-")[0].lower()
+
+    def _known_codes(self) -> set[str]:
+        return set(LANGUAGES) | set(self._piper_langs)
 
     def _load_piper(self, code: str):
         from piper import PiperVoice
@@ -87,27 +90,75 @@ class DualEngineTTS(MultilingualKokoro):
 
     async def run_tts(self, text: str,
                       context_id: str) -> AsyncGenerator[Frame, None]:
-        code = self._piper_code()
-        if code is None:
-            async for frame in super().run_tts(text, context_id):
+        """Synthesize one utterance, possibly mixing languages (T6).
+
+        The text is split on span tags; each span goes to its own engine
+        and voice, and the audio is stitched in order. A plain
+        single-language reply in a Kokoro language takes the base class's
+        streaming path untouched.
+        """
+        primary = self._current_code()
+        spans = split_spans(text, primary, known=self._known_codes())
+
+        if (len(spans) == 1 and spans[0].language == primary
+                and primary not in self._piper_langs):
+            # The common case: one language, Kokoro's own streaming path.
+            # spans[0].text (not text) so stray tag markers never speak.
+            async for frame in super().run_tts(spans[0].text, context_id):
                 yield frame
             return
+
         try:
             await self.start_tts_usage_metrics(text)
-            voice = await asyncio.to_thread(self._load_piper, code)
-            log.info("piper: synthesizing %d chars (%s)", len(text), code)
-            chunks = await asyncio.to_thread(
-                lambda: list(voice.synthesize(text)))
-            for chunk in chunks:
-                await self.stop_ttfb_metrics()
-                audio_int16 = (np.clip(chunk.audio_float_array, -1.0, 1.0)
-                               * 32767).astype(np.int16).tobytes()
-                audio = await self._resampler.resample(
-                    audio_int16, chunk.sample_rate, self.sample_rate)
-                yield TTSAudioRawFrame(
-                    audio=audio, sample_rate=self.sample_rate,
-                    num_channels=1, context_id=context_id)
+            for span in spans:
+                if span.language in self._piper_langs:
+                    async for frame in self._piper_span(span.language,
+                                                        span.text,
+                                                        context_id):
+                        yield frame
+                else:
+                    async for frame in self._kokoro_span(span.language,
+                                                         span.text,
+                                                         context_id):
+                        yield frame
         except Exception as e:                                  # noqa: BLE001
-            yield ErrorFrame(error=f"piper synthesis failed: {e}")
+            yield ErrorFrame(error=f"tts assembly failed: {e}")
         finally:
             await self.stop_ttfb_metrics()
+
+    async def _piper_span(self, code: str, text: str,
+                          context_id: str) -> AsyncGenerator[Frame, None]:
+        voice = await asyncio.to_thread(self._load_piper, code)
+        log.info("piper: synthesizing %d chars (%s)", len(text), code)
+        chunks = await asyncio.to_thread(lambda: list(voice.synthesize(text)))
+        for chunk in chunks:
+            await self.stop_ttfb_metrics()
+            audio_int16 = (np.clip(chunk.audio_float_array, -1.0, 1.0)
+                           * 32767).astype(np.int16).tobytes()
+            audio = await self._resampler.resample(
+                audio_int16, chunk.sample_rate, self.sample_rate)
+            yield TTSAudioRawFrame(
+                audio=audio, sample_rate=self.sample_rate,
+                num_channels=1, context_id=context_id)
+
+    async def _kokoro_span(self, code: str, text: str,
+                           context_id: str) -> AsyncGenerator[Frame, None]:
+        # Mirrors the Kokoro base run_tts, but with this span's voice and
+        # language rather than the service's current settings. When the
+        # span IS the current language, keep any --voice override.
+        spoken = LANGUAGES.get(code) or LANGUAGES["en"]
+        voice = (self._settings.voice if code == self._current_code()
+                 else spoken.voice)
+        lang = self.language_to_service_language(spoken.language)
+        log.info("kokoro: synthesizing %d chars (%s, voice %s)",
+                 len(text), code, voice)
+        stream = self._kokoro.create_stream(text, voice=voice, lang=lang,
+                                            speed=1.0)
+        async for samples, sample_rate in stream:
+            await self.stop_ttfb_metrics()
+            audio_int16 = (samples * 32767).astype(np.int16).tobytes()
+            audio = await self._resampler.resample(
+                audio_int16, sample_rate, self.sample_rate)
+            yield TTSAudioRawFrame(
+                audio=audio, sample_rate=self.sample_rate,
+                num_channels=1, context_id=context_id)

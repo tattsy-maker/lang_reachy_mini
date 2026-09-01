@@ -43,7 +43,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T3 | Learner store | T0 | done | 2026-08-31 |
 | T4 | Tutor mode: briefing + memory tools | T0, T3 | done | 2026-08-31 |
 | T5 | Piper TTS + per-language engine routing | T0 | done | 2026-08-31 |
-| T6 | Mixed-language TTS assembly | T5 | todo | — |
+| T6 | Mixed-language TTS assembly | T5 | done | 2026-08-31 |
 | T7 | Mixed-language STT hardening | T0 | todo | — |
 | T8 | Cloud speech mode (Gemini Live) | T4 | todo | — |
 | T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
@@ -305,7 +305,11 @@ answer (listen to the wav).
 tag leakage (brackets spoken aloud) impossible by test.
 
 **Progress log.**
-- —
+- 2026-08-31 — done; 13 tests green. EN+ES and EN+FR round-trip with both
+  halves; the live agent tagged `[es]la biblioteca[/es]` unprompted and
+  the log shows the voice switching per span. EN+RU speaks correctly but
+  plain Whisper keeps only the dominant half of the clip — T7's problem,
+  honestly recorded. [progress/T6.md](progress/T6.md).
 
 ---
 

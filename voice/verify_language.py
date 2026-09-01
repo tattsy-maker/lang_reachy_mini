@@ -74,6 +74,51 @@ def synth_piper(code: str, text: str, voices_dir=None) -> np.ndarray:
     return resample_16k(audio, rate)
 
 
+def synth_kokoro(code: str, text: str, voice: str | None = None) -> np.ndarray:
+    """Kokoro synthesis -> mono float32 at 16 kHz, engine-direct (no
+    pipeline), using the same cached model files as the live service."""
+    from pipecat.services.kokoro.tts import (
+        KOKORO_CACHE_DIR, _ensure_model_files)
+    from kokoro_onnx import Kokoro
+    from multilingual import LANGUAGES, MultilingualKokoro
+    cache = synth_kokoro.__dict__
+    if "kokoro" not in cache:
+        model = KOKORO_CACHE_DIR / "kokoro-v1.0.onnx"
+        voices = KOKORO_CACHE_DIR / "voices-v1.0.bin"
+        _ensure_model_files(model, voices)
+        cache["kokoro"] = Kokoro(str(model), str(voices))
+    spoken = LANGUAGES[code]
+    lang = MultilingualKokoro.ESPEAK_CODES.get(spoken.language)
+    if lang is None:
+        lang = str(spoken.language.value).lower()
+        lang = {"en": "en-us"}.get(lang, lang)
+    samples, rate = cache["kokoro"].create(
+        text, voice=voice or spoken.voice, speed=1.0, lang=lang)
+    return resample_16k(samples.astype(np.float32), rate)
+
+
+def synth_mixed(text: str, primary: str, voices_dir=None) -> np.ndarray:
+    """T6's assembly, engine-direct: split the tagged text into spans,
+    synthesize each with its engine (Kokoro or Piper), stitch in order.
+    Mirrors DualEngineTTS's per-span dispatch for measurement scripts."""
+    from spans import split_spans
+    from piper_tts import PIPER_LANGUAGES
+    from multilingual import LANGUAGES
+    known = set(LANGUAGES) | set(PIPER_LANGUAGES)
+    pieces = []
+    for span in split_spans(text, primary, known=known):
+        if not span.text:
+            continue
+        if span.language in PIPER_LANGUAGES:
+            pieces.append(synth_piper(span.language, span.text, voices_dir))
+        else:
+            pieces.append(synth_kokoro(span.language, span.text))
+        # a hair of silence at the seam reads as natural pacing
+        pieces.append(np.zeros(int(0.08 * 16000), dtype=np.float32))
+    return (np.concatenate(pieces) if pieces
+            else np.zeros(1600, dtype=np.float32))
+
+
 def resample_16k(audio: np.ndarray, rate: int) -> np.ndarray:
     if rate == 16000:
         return audio
