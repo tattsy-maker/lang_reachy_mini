@@ -1,3 +1,7 @@
 .env
 .venv/
 __pycache__/
+
+# Piper voice models (~63 MB each): fetched once, never committed.
+# piper_tts.py's docstring has the download command.
+piper_voices/

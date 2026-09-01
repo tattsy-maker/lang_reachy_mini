@@ -84,6 +84,12 @@ from multilingual import (                                              # noqa: 
     MultilingualKokoro,
     MultilingualWhisperMLX,
 )
+from piper_tts import (                                                 # noqa: E402
+    DEFAULT_VOICES_DIR as PIPER_VOICES_DIR,
+    PIPER_LANGUAGES,
+    DualEngineTTS,
+    piper_available,
+)
 from tutor_mode import (                                                # noqa: E402
     BRIEFING_SESSIONS,
     DEFAULT_LEARNERS_ROOT,
@@ -195,7 +201,10 @@ you say anything.
 You cannot see -- you have no camera feed in this conversation. If you are asked \
 what you can see, say so plainly rather than inventing something."""
 
-SYSTEM_PROMPT = SYSTEM_PROMPT.format(languages=SPOKEN_LANGUAGES)
+# {languages} is filled in at startup with the languages that can really
+# be spoken on this machine: Kokoro's verified set plus whatever Piper
+# voices are on disk (T5). A static list here would make Claude refuse
+# languages the speech stack can in fact speak.
 
 
 # ---------------------------------------------------------------------------
@@ -549,18 +558,38 @@ async def run(args) -> None:
     # Kokoro at a matching voice. Pin it to one language to skip all that.
     auto_language = args.language == "auto"
     start_lang = "en" if auto_language else args.language
-    start_voice = args.voice or LANGUAGES[start_lang].voice
+
+    # Two engines, one voice map: Kokoro's verified languages plus whatever
+    # Piper voices are actually on disk (T5: ru/zh, ~63 MB each, fetched
+    # once -- see piper_tts.py's docstring).
+    args.piper_voices = args.piper_voices or PIPER_VOICES_DIR
+    piper_langs = piper_available(args.piper_voices)
+    if piper_langs:
+        logger.info("piper: %s available (%s)",
+                    ", ".join(v.name for v in piper_langs.values()),
+                    args.piper_voices)
+    speakable = {**LANGUAGES, **piper_langs}
+    if start_lang not in speakable:
+        raise SystemExit("--language %r has no local voice (have: %s)"
+                         % (start_lang, ", ".join(sorted(speakable))))
+    start_voice = args.voice or speakable[start_lang].voice
+    spoken_names = ", ".join(v.name for v in speakable.values())
+    base_prompt = SYSTEM_PROMPT.format(languages=spoken_names)
 
     if auto_language:
         stt = MultilingualWhisperMLX(
             settings=MultilingualWhisperMLX.Settings(model=args.whisper_model))
     else:
         stt = WhisperSTTServiceMLX(settings=WhisperSTTServiceMLX.Settings(
-            model=args.whisper_model, language=LANGUAGES[start_lang].language))
-    tts = MultilingualKokoro(settings=MultilingualKokoro.Settings(
-        voice=start_voice, language=LANGUAGES[start_lang].language))
+            model=args.whisper_model,
+            language=speakable[start_lang].language))
+    tts = DualEngineTTS(
+        voices_dir=args.piper_voices,
+        settings=DualEngineTTS.Settings(
+            voice=start_voice, language=speakable[start_lang].language))
     language_router = LanguageRouter(
-        initial=start_lang, voice=args.voice, enabled=auto_language)
+        initial=start_lang, voice=args.voice, enabled=auto_language,
+        extra=piper_langs)
 
     # Claude Opus 5. Two deliberate choices for a voice loop:
     #
@@ -601,7 +630,7 @@ async def run(args) -> None:
     # register the memory (and, with a face source, enrollment) tools next
     # to the motion tools. Works with or without a robot -- these tools
     # only touch the learner store and the camera.
-    system_prompt = SYSTEM_PROMPT
+    system_prompt = base_prompt
     holder = store = None
     if args.session and not args.face_source:
         raise SystemExit("--session needs --face-source (who would it watch?)")
@@ -618,7 +647,7 @@ async def run(args) -> None:
             # The session runner (started after the pipeline exists) owns
             # identity: the agent boots into the idle prompt and waits.
             from session import IDLE_NOTE
-            system_prompt = SYSTEM_PROMPT + IDLE_NOTE
+            system_prompt = base_prompt + IDLE_NOTE
         elif args.face_source and holder.learner is None:
             from face_id import identify_from_source
             ident = await asyncio.to_thread(
@@ -637,7 +666,7 @@ async def run(args) -> None:
                     name=holder.candidate.name)
             else:  # unknown face, or no face at all: same stranger flow
                 system_prompt += STRANGER_BRIEFING.format(
-                    languages=SPOKEN_LANGUAGES)
+                    languages=spoken_names)
         tools = tools + build_tutor_tools(store, holder)
         if args.face_source:
             tools = tools + build_enrollment_tools(
@@ -733,8 +762,8 @@ async def run(args) -> None:
         from session import SessionRunner
         session_runner = SessionRunner(
             source=args.face_source, store=store, holder=holder,
-            context=context, task=task, base_prompt=SYSTEM_PROMPT,
-            languages=SPOKEN_LANGUAGES, robot=robot,
+            context=context, task=task, base_prompt=base_prompt,
+            languages=spoken_names, robot=robot,
             stable_secs=args.stable_secs, absent_secs=args.absent_secs)
         session_task = asyncio.create_task(session_runner.run())
         logger.info("session mode: watching for a face (stable %.1fs, "
@@ -803,15 +832,20 @@ def build_parser() -> argparse.ArgumentParser:
     g = p.add_argument_group("speech (local)")
     g.add_argument("--whisper-model", default=MLXModel.LARGE_V3_TURBO_Q4.value,
                    help="MLX Whisper model; smaller is faster")
+    g.add_argument("--piper-voices", default=None, metavar="DIR",
+                   help="directory of Piper voice models for ru/zh "
+                        "(default: voice/piper_voices; missing models just "
+                        "disable those languages)")
     g.add_argument("--voice", default=None,
                    help="Kokoro voice id, overriding the default for the "
                         "starting language (default af_heart for English). "
                         "Switching language picks that language's own voice.")
     g.add_argument("--language", default="auto",
-                   choices=["auto"] + list(LANGUAGES),
+                   choices=["auto"] + list(LANGUAGES) + list(PIPER_LANGUAGES),
                    help="auto (default) detects the language you speak each "
                         "turn and answers in it. Naming one pins both "
-                        "recognition and speech to it.")
+                        "recognition and speech to it. ru/zh need their "
+                        "Piper voices on disk (see --piper-voices).")
     g.add_argument("--stop-secs", type=float, default=0.35,
                    help="VAD silence before end-of-speech is considered")
     g.add_argument("--no-warmup", action="store_true",

@@ -42,7 +42,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T2 | Face recognition core | T0, T1 | done | 2026-08-31 |
 | T3 | Learner store | T0 | done | 2026-08-31 |
 | T4 | Tutor mode: briefing + memory tools | T0, T3 | done | 2026-08-31 |
-| T5 | Piper TTS + per-language engine routing | T0 | todo | — |
+| T5 | Piper TTS + per-language engine routing | T0 | done | 2026-08-31 |
 | T6 | Mixed-language TTS assembly | T5 | todo | — |
 | T7 | Mixed-language STT hardening | T0 | todo | — |
 | T8 | Cloud speech mode (Gemini Live) | T4 | todo | — |
@@ -269,7 +269,12 @@ the pipeline (stub robot, `audio`-marked or written to wav).
 fallback decision (misaki / cut) is made and logged with the numbers.
 
 **Progress log.**
-- —
+- 2026-08-31 — done, **both languages PASS the gate**: ru 95.9%, zh 92.9%
+  (report in `tests/reports/verify_language_2026-08-31.*`). DualEngineTTS
+  dispatches Kokoro/Piper per turn; `--language ru` E2E through the real
+  agent produced Russian replies spoken by Piper. One trap found: the
+  system prompt's language roster had to become dynamic — Claude refused
+  Russian while the stack could speak it. [progress/T5.md](progress/T5.md).
 
 ---
 

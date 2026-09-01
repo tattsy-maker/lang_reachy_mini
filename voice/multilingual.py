@@ -193,8 +193,18 @@ class MultilingualWhisperMLX(WhisperSTTServiceMLX):
             detected = chunk.get("language")
             language = None
             if detected:
-                known = LANGUAGES.get(str(detected).lower())
-                language = known.language if known else None
+                code = str(detected).lower()
+                known = LANGUAGES.get(code)
+                if known:
+                    language = known.language
+                else:
+                    # Not a Kokoro language, but downstream may still speak
+                    # it (Piper's ru/zh); report it and let the router's
+                    # speakable() guard decide. Unknown codes stay None.
+                    try:
+                        language = Language(code)
+                    except ValueError:
+                        language = None
 
             log.debug("transcribed (%s): %s", detected or "unknown", text.strip())
             await self._handle_transcription(text, True, language)
@@ -218,16 +228,27 @@ class LanguageRouter(FrameProcessor):
     """
 
     def __init__(self, *, initial: str = "en", voice: str | None = None,
-                 enabled: bool = True):
+                 enabled: bool = True,
+                 extra: dict[str, Voice] | None = None):
         super().__init__()
         self._enabled = enabled
         self._current = initial
+        # Languages a second engine can speak (T5: Piper's ru/zh), checked
+        # after Kokoro's own. The TTS service downstream must know how to
+        # honor them (DualEngineTTS does).
+        self._extra = dict(extra or {})
         # An explicit --voice overrides the default for the starting language
         # only. Switching away and back returns to that override.
         self._overrides = {initial: voice} if voice else {}
 
+    def speakable(self, code: str):
+        """The Voice for a code across both engines, or None."""
+        return LANGUAGES.get(code) or self._extra.get(code)
+
     def voice_for(self, code: str) -> str:
-        return self._overrides.get(code) or LANGUAGES[code].voice
+        if self._overrides.get(code):
+            return self._overrides[code]
+        return self.speakable(code).voice
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -241,20 +262,20 @@ class LanguageRouter(FrameProcessor):
         code = _base_code(frame.language)
         if code is None or code == self._current:
             return
-        if code not in LANGUAGES:
+        spoken = self.speakable(code)
+        if spoken is None:
             if code in BROKEN_LANGUAGES:
                 # Worth saying out loud: the robot is about to answer in
                 # English and the reason is not obvious from the outside.
-                log.info("heard %s, which Kokoro cannot speak intelligibly "
-                         "here; staying in %s",
-                         BROKEN_LANGUAGES[code].name, LANGUAGES[self._current].name)
+                log.info("heard %s, which no local engine speaks "
+                         "intelligibly here; staying in %s",
+                         BROKEN_LANGUAGES[code].name,
+                         self.speakable(self._current).name)
             return
         if len(frame.text.strip()) < MIN_CHARS_TO_SWITCH:
             log.debug("ignoring %s detected from a short utterance: %r",
                       code, frame.text.strip())
             return
-
-        spoken = LANGUAGES[code]
         voice = self.voice_for(code)
         log.info("switching speech to %s (voice %s)", spoken.name, voice)
         self._current = code
