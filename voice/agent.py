@@ -83,6 +83,12 @@ from multilingual import (                                              # noqa: 
     MultilingualKokoro,
     MultilingualWhisperMLX,
 )
+from tutor_mode import (                                                # noqa: E402
+    DEFAULT_LEARNERS_ROOT,
+    build_briefing,
+    build_tutor_tools,
+    load_learner,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
@@ -581,16 +587,28 @@ async def run(args) -> None:
     # redundant and pipecat warns about it.
     tools = build_tools(robot) if robot else []
 
+    # Tutor mode: append the learner's briefing to the system prompt and
+    # register the memory tools next to the motion tools. Works with or
+    # without a robot -- the memory tools only touch the learner store.
+    system_prompt = SYSTEM_PROMPT
+    if args.learner:
+        learner, notes, store = load_learner(args.learners_root, args.learner)
+        system_prompt += build_briefing(learner, notes)
+        tools = tools + build_tutor_tools(store, learner)
+        logger.info("tutor mode: student %s (%s %s, %d prior sessions, "
+                    "tier %s)", learner.name, learner.level,
+                    learner.target_language, learner.sessions, learner.tier)
+
     # pipecat 1.6's LLMContext accepts a tools list or NOT_GIVEN but not None,
     # so the no-robot path must omit the argument entirely.
     if tools:
         context = SafeLLMContext(
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}],
+            messages=[{"role": "system", "content": system_prompt}],
             tools=tools,
         )
     else:
         context = SafeLLMContext(
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}],
+            messages=[{"role": "system", "content": system_prompt}],
         )
 
     # Turn-taking. In pipecat 1.6 both VAD and end-of-turn detection hang off
@@ -751,6 +769,16 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--fast", action="store_true",
                    help="Claude fast mode: same model, up to 2.5x faster "
                         "output, at premium pricing ($10/$50 per MTok)")
+
+    g = p.add_argument_group("tutor")
+    g.add_argument("--learner", default=None, metavar="NAME",
+                   help="run as this learner's language tutor: their profile "
+                        "and recent notes go into the briefing, and the "
+                        "save_session_notes / update_learner_level tools are "
+                        "enabled (accepts a folder id or a display name)")
+    g.add_argument("--learners-root", default=DEFAULT_LEARNERS_ROOT,
+                   metavar="DIR",
+                   help="learner store root")
 
     g = p.add_argument_group("embodiment")
     g.add_argument("--no-sway", action="store_true",

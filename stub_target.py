@@ -83,3 +83,23 @@ class StubTarget(ReachyMiniTarget):
 
     def goto_sleep(self) -> None:
         self.set_posture(head_pitch=0.4, head_z=-0.015)
+
+    # -- media ownership ----------------------------------------------------
+    #
+    # The base class delegates these to the vendor SDK object in self._mini,
+    # but the stub's _mini is just the sentinel "stub" -- without these
+    # overrides, set_media_released over the wire dies with
+    # "'str' object has no attribute 'release_media'" (found the first time
+    # the voice agent was pointed at a served stub).
+
+    def release_media(self) -> None:
+        self._require()
+        self._media_released = True
+
+    def acquire_media(self) -> None:
+        self._require()
+        self._media_released = False
+
+    @property
+    def media_released(self) -> bool:
+        return getattr(self, "_media_released", False)

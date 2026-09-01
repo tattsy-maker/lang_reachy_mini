@@ -41,7 +41,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T1 | Camera capture module | T0 | done | 2026-08-31 |
 | T2 | Face recognition core | T0, T1 | todo | — |
 | T3 | Learner store | T0 | done | 2026-08-31 |
-| T4 | Tutor mode: briefing + memory tools | T0, T3 | todo | — |
+| T4 | Tutor mode: briefing + memory tools | T0, T3 | done | 2026-08-31 |
 | T5 | Piper TTS + per-language engine routing | T0 | todo | — |
 | T6 | Mixed-language TTS assembly | T5 | todo | — |
 | T7 | Mixed-language STT hardening | T0 | todo | — |
@@ -227,7 +227,13 @@ against the stub; inspect the written notes by eye.
 `--say`; note in log whether a real-microphone run happened.
 
 **Progress log.**
-- —
+- 2026-08-31 — done; 7 tests green (3 unit + 4 live `--say` runs: Spanish
+  lesson with correction, goodbye→notes, beginner scaffolding, level
+  update). Stub-robot E2E run by hand — which found and fixed a stub bug
+  (`set_media_released` was broken against a served stub). New module is
+  `voice/tutor_mode.py` (the `tutor` package name was taken by the store).
+  No dedicated real-microphone run yet, though the live mic was open
+  during all `--say` runs (see learnings). [progress/T4.md](progress/T4.md).
 
 ---
 
