@@ -83,6 +83,7 @@ from multilingual import (                                              # noqa: 
     LanguageRouter,
     MultilingualKokoro,
     MultilingualWhisperMLX,
+    bilingual_priming,
 )
 from piper_tts import (                                                 # noqa: E402
     DEFAULT_VOICES_DIR as PIPER_VOICES_DIR,
@@ -681,6 +682,14 @@ async def run(args) -> None:
                         "tier %s)", holder.learner.name, holder.learner.level,
                         holder.learner.target_language,
                         holder.learner.sessions, holder.learner.tier)
+            # Bilingual priming (T7): keep both lesson languages "in mind"
+            # so embedded foreign phrases survive transcription better.
+            if isinstance(stt, MultilingualWhisperMLX):
+                prompt = bilingual_priming(holder.learner.target_language)
+                if prompt:
+                    stt.initial_prompt = prompt
+                    logger.info("whisper priming: English + %s",
+                                holder.learner.target_language)
 
     # pipecat 1.6's LLMContext accepts a tools list or NOT_GIVEN but not None,
     # so the no-robot path must omit the argument entirely.
@@ -768,7 +777,7 @@ async def run(args) -> None:
         session_runner = SessionRunner(
             source=args.face_source, store=store, holder=holder,
             context=context, task=task, base_prompt=base_prompt,
-            languages=spoken_names, robot=robot,
+            languages=spoken_names, robot=robot, stt=stt,
             stable_secs=args.stable_secs, absent_secs=args.absent_secs)
         session_task = asyncio.create_task(session_runner.run())
         logger.info("session mode: watching for a face (stable %.1fs, "

@@ -1,0 +1,13 @@
+# Code-switch gate — 2026-08-31-smoke
+
+Span survival: how much of the embedded foreign phrase came back recognizably (100 = verbatim).
+
+## en+es — unprimed 59.1%, primed 50.0%
+
+- “la biblioteca”: 100.0% → 100.0% primed
+  - unprimed: How do you say la biblioteca in English?
+  - primed: How do you say la biblioteca in English?
+- “tengo hambre”: 18.2% → 0.0% primed
+  - unprimed: does mean I am hungry?
+  - primed: 
+

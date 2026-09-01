@@ -122,6 +122,28 @@ reading them. If the agent stops answering mid-conversation, the first thing to
 check is `grep "dropping unconvertible thought" voice/agent.log` (see the voice
 README for why).
 
+## Language-tutor additions (2026-08-31)
+
+The tutor work (see `LANGUAGE_TUTOR_SPEC.md`, tracker in `TASKS.md`,
+per-task notes in `progress/`) added to the voice agent:
+
+- `--learner NAME --learners-root DIR` — tutor mode for one learner;
+  `--face-source SRC` — identify by face / conversational enrollment;
+  `--session --stable-secs S --absent-secs S` — the full booth loop;
+  `--deaf` — never open the mic (**always use with `--say` scripted runs**,
+  room noise becomes phantom user turns otherwise);
+  `--language ru|zh` — spoken by Piper (models in `voice/piper_voices/`,
+  download command in `voice/piper_tts.py`'s docstring).
+- Tests: `tests/run.sh [t0..t11]` (own venv, markers skip cleanly when
+  hardware/keys/models are absent). Measurement reports live in
+  `tests/reports/`.
+- **The `video` group trap** (third of its kind after `dialout`/`audio`):
+  the Reachy camera at `/dev/video0` needs `sudo usermod -aG video altha`
+  once, else every open fails. `/dev/video1` is the camera's metadata
+  node — never read frames from it.
+- Real learner data lives in `learners/` (gitignored, private by design);
+  end-of-day guest wipe: `python tutor/wipe_guests.py`.
+
 ## First-time setup on a fresh clone
 
 Neither `.venv/` exists until you build it -- both are gitignored, and so is

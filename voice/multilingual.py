@@ -137,6 +137,48 @@ class MultilingualKokoro(KokoroTTSService):
         return super().language_to_service_language(language)
 
 
+# Bilingual priming (T7). Whisper conditions its decoding on an initial
+# prompt; feeding it one sentence in each language keeps both "in mind"
+# mid-utterance, which measurably helps embedded foreign phrases survive
+# (see tests/reports/verify_codeswitch_*). One entry per tutoring language.
+PRIMING = {
+    "es": "A bilingual lesson mixing English and Spanish. Una lección "
+          "bilingüe que mezcla inglés y español.",
+    "fr": "A bilingual lesson mixing English and French. Une leçon "
+          "bilingue qui mélange l'anglais et le français.",
+    "it": "A bilingual lesson mixing English and Italian. Una lezione "
+          "bilingue che mescola inglese e italiano.",
+    "pt": "A bilingual lesson mixing English and Portuguese. Uma aula "
+          "bilíngue que mistura inglês e português.",
+    "ru": "A bilingual lesson mixing English and Russian. Двуязычный "
+          "урок, в котором смешиваются английский и русский.",
+    "zh": "A bilingual lesson mixing English and Chinese. 一节混合英语"
+          "和中文的双语课。",
+    "hi": "A bilingual lesson mixing English and Hindi. अंग्रेज़ी और "
+          "हिंदी को मिलाने वाला द्विभाषी पाठ।",
+}
+
+
+# Which pairs priming actually helps -- measured, not assumed
+# (tests/reports/verify_codeswitch_2026-08-31.md). Span survival with vs
+# without priming: es 86->96, ru 62->88 (unprimed, Whisper *translates*
+# Russian spans into English). But fr 82->52, pt 74->40, it 92->80,
+# zh 69->56: for those, the prompt induces Whisper's known
+# hallucination/repetition failure ("My favorite phrase is! My favorite
+# phrase is...", empty transcripts, stray Arabic). So priming is a
+# per-pair policy, applied only where the measurement says it helps.
+PRIMING_HELPS = {"es", "ru"}
+
+
+def bilingual_priming(code: str) -> str | None:
+    """The Whisper initial prompt for an English+<code> lesson, or None
+    for pairs where priming measurably hurts (see PRIMING_HELPS)."""
+    code = str(code).lower()
+    if code not in PRIMING_HELPS:
+        return None
+    return PRIMING.get(code)
+
+
 class MultilingualWhisperMLX(WhisperSTTServiceMLX):
     """MLX Whisper with detection turned back on, and the result kept.
 
@@ -147,6 +189,10 @@ class MultilingualWhisperMLX(WhisperSTTServiceMLX):
     below are carried over from pipecat's implementation deliberately; if that
     upstream method grows a third, this needs it too.
     """
+
+    # Set (e.g. by tutor mode) to condition every transcription on a
+    # bilingual prompt; None leaves Whisper unconditioned.
+    initial_prompt: str | None = None
 
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
         """Transcribe, detect the language, and report both."""
@@ -170,6 +216,7 @@ class MultilingualWhisperMLX(WhisperSTTServiceMLX):
                 path_or_hf_repo=model_path,
                 temperature=temperature,
                 language=None,
+                initial_prompt=self.initial_prompt,
             )
 
             text = ""

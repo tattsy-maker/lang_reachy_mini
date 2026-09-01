@@ -1,0 +1,35 @@
+[
+  {
+    "pair": "en+es",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "priming": "A bilingual lesson mixing English and Spanish. Una lección bilingüe que mezcla inglés y español.",
+    "unprimed_avg": 59.1,
+    "primed_avg": 50.0,
+    "phrases": [
+      {
+        "phrase": "How do you say [es]la biblioteca[/es] in English?",
+        "span": "la biblioteca",
+        "unprimed": {
+          "heard": "How do you say la biblioteca in English?",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "How do you say la biblioteca in English?",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Does [es]tengo hambre[/es] mean I am hungry?",
+        "span": "tengo hambre",
+        "unprimed": {
+          "heard": "does mean I am hungry?",
+          "survival": 18.2
+        },
+        "primed": {
+          "heard": "",
+          "survival": 0.0
+        }
+      }
+    ]
+  }
+]

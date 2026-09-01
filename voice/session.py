@@ -111,7 +111,7 @@ class SessionRunner:
     """Drives the machine from real frames and rewires the live agent."""
 
     def __init__(self, *, source, store, holder, context, task,
-                 base_prompt: str, languages: str, robot=None,
+                 base_prompt: str, languages: str, robot=None, stt=None,
                  stable_secs: float = 2.0, absent_secs: float = 60.0,
                  fps: float = 2.0, samples: int = 3,
                  save_wait_secs: float = 30.0):
@@ -123,6 +123,7 @@ class SessionRunner:
         self.base_prompt = base_prompt
         self.languages = languages
         self.robot = robot
+        self.stt = stt  # optional: bilingual priming per learner (T7)
         self.machine = SessionMachine(stable_secs, absent_secs)
         self.fps = fps
         self.samples = samples
@@ -169,6 +170,7 @@ class SessionRunner:
             logger.info("session: recognized %s (score %.3f)",
                         learner.id, found.score)
             self.holder.learner = learner
+            self._prime_stt(learner)
             notes = self.store.read_notes(learner.id,
                                           max_sessions=BRIEFING_SESSIONS)
             return build_briefing(learner, notes)
@@ -176,6 +178,16 @@ class SessionRunner:
                     learner.id, found.score)
         self.holder.candidate = learner
         return UNSURE_BRIEFING.format(name=learner.name)
+
+    def _prime_stt(self, learner) -> None:
+        if self.stt is None:
+            return
+        from multilingual import bilingual_priming
+        prompt = bilingual_priming(learner.target_language)
+        if prompt and hasattr(self.stt, "initial_prompt"):
+            self.stt.initial_prompt = prompt
+            logger.info("session: whisper priming English + %s",
+                        learner.target_language)
 
     async def start_session(self, now: float) -> None:
         from face import recognize
@@ -202,6 +214,8 @@ class SessionRunner:
                 logger.warning("session: notes were never saved for %s",
                                learner.id)
         self.holder.reset()
+        if self.stt is not None and hasattr(self.stt, "initial_prompt"):
+            self.stt.initial_prompt = None
         self.context.set_messages([
             {"role": "system", "content": self.idle_prompt()}])
         await self._robot_neutral()

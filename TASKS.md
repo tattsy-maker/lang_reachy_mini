@@ -44,7 +44,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T4 | Tutor mode: briefing + memory tools | T0, T3 | done | 2026-08-31 |
 | T5 | Piper TTS + per-language engine routing | T0 | done | 2026-08-31 |
 | T6 | Mixed-language TTS assembly | T5 | done | 2026-08-31 |
-| T7 | Mixed-language STT hardening | T0 | todo | — |
+| T7 | Mixed-language STT hardening | T0 | done | 2026-08-31 |
 | T8 | Cloud speech mode (Gemini Live) | T4 | todo | — |
 | T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
 | T10 | Session lifecycle | T2, T4, T9 | done | 2026-08-31 |
@@ -342,7 +342,12 @@ the spec's terms: which pairs are "seamless locally" vs "cloud mode
 required". No fixed pass bar — the deliverable is the honest number.
 
 **Progress log.**
-- —
+- 2026-08-31 — done; full six-pair gate measured (8 phrases/pair, with and
+  without priming). Best-config span survival: es 96%, it 92%, ru 88%
+  (priming turns Whisper's translate-the-Russian habit off, +26 points),
+  fr 82%, pt 74%, zh 69% — **pt and zh are the cloud-mode pairs**.
+  Priming *hurts* fr/pt/it/zh (hallucination loops), so it's now a
+  measured per-pair policy (`PRIMING_HELPS`). [progress/T7.md](progress/T7.md).
 
 ---
 

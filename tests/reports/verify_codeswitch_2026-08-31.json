@@ -1,0 +1,632 @@
+[
+  {
+    "pair": "en+es",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "priming": "A bilingual lesson mixing English and Spanish. Una lección bilingüe que mezcla inglés y español.",
+    "unprimed_avg": 86.0,
+    "primed_avg": 96.2,
+    "phrases": [
+      {
+        "phrase": "How do you say [es]la biblioteca[/es] in English?",
+        "span": "la biblioteca",
+        "unprimed": {
+          "heard": "How do you say la biblioteca in English?",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "How do you say la biblioteca in English.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Does [es]tengo hambre[/es] mean I am hungry?",
+        "span": "tengo hambre",
+        "unprimed": {
+          "heard": "does mean I am hungry?",
+          "survival": 18.2
+        },
+        "primed": {
+          "heard": "Does Tengo hambre mean I am",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Yesterday I learned the word [es]madrugada[/es] in class.",
+        "span": "madrugada",
+        "unprimed": {
+          "heard": "Yesterday I learned the word. Madrugada. In class.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Yesterday I learned the word Madrugada in class",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "My favorite phrase is [es]buenos días[/es], it sounds friendly.",
+        "span": "buenos días",
+        "unprimed": {
+          "heard": "My favorite phrase is, Buenos dias. It sounds friendly.",
+          "survival": 70.0
+        },
+        "primed": {
+          "heard": "My favorite phrase is, Buenos dias. It sounds friendly.",
+          "survival": 70.0
+        }
+      },
+      {
+        "phrase": "The waiter said [es]la cuenta, por favor[/es] very fast.",
+        "span": "la cuenta, por favor",
+        "unprimed": {
+          "heard": "The waiter said, La cuenta, por favor. Very fast.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "La cuenta por favor.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Is it correct to say [es]me gusta mucho[/es] here?",
+        "span": "me gusta mucho",
+        "unprimed": {
+          "heard": "Is it correct to say, me gusta mucho, here?",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Is it correct to say me gusta mucho here?",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "She wrote [es]nos vemos mañana[/es] at the end.",
+        "span": "nos vemos mañana",
+        "unprimed": {
+          "heard": "She wrote, Nos vemos mañana. At the end.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "She wrote, Nos vemos mañana.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "I always forget that [es]el mapa[/es] is masculine.",
+        "span": "el mapa",
+        "unprimed": {
+          "heard": "I always forget that el mapa is masculine",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "I always forget that el mapa is masculine.",
+          "survival": 100.0
+        }
+      }
+    ]
+  },
+  {
+    "pair": "en+fr",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "priming": "A bilingual lesson mixing English and French. Une leçon bilingue qui mélange l'anglais et le français.",
+    "unprimed_avg": 82.4,
+    "primed_avg": 51.5,
+    "phrases": [
+      {
+        "phrase": "How do you say [fr]la bibliothèque[/fr] in English?",
+        "span": "la bibliothèque",
+        "unprimed": {
+          "heard": "How do you say? La bibliothèque. In English.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "How do you say la bibliothèque in English?",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Does [fr]j'ai faim[/fr] mean I am hungry?",
+        "span": "j'ai faim",
+        "unprimed": {
+          "heard": "Does j'ai faim mean I am hungry?",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Does j'ai faim mean I am hungry?",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Yesterday I learned the word [fr]la gare[/fr] in class.",
+        "span": "la gare",
+        "unprimed": {
+          "heard": "Yesterday, I learned the word. La guerre. In class.",
+          "survival": 50.0
+        },
+        "primed": {
+          "heard": "Yesterday I learned the word الت",
+          "survival": 33.3
+        }
+      },
+      {
+        "phrase": "My favorite phrase is [fr]bonne journée[/fr], it sounds friendly.",
+        "span": "bonne journée",
+        "unprimed": {
+          "heard": "My favorite phrase is, Bonne journée. It sounds friendly.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "My favorite phrase is, it sounds friendly.",
+          "survival": 16.7
+        }
+      },
+      {
+        "phrase": "The waiter said [fr]l'addition, s'il vous plaît[/fr] very fast.",
+        "span": "l'addition, s'il vous plaît",
+        "unprimed": {
+          "heard": "The waiter said, Very fast.",
+          "survival": 9.5
+        },
+        "primed": {
+          "heard": "The waiter. Very fast.",
+          "survival": 9.5
+        }
+      },
+      {
+        "phrase": "Is it correct to say [fr]ça me plaît beaucoup[/fr] here?",
+        "span": "ça me plaît beaucoup",
+        "unprimed": {
+          "heard": "Is it correct to say? Ça me plaît beaucoup. Here.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Is it correct to say? Ça me plait beaucoup. Here.",
+          "survival": 52.9
+        }
+      },
+      {
+        "phrase": "She wrote [fr]à demain[/fr] at the end.",
+        "span": "à demain",
+        "unprimed": {
+          "heard": "She wrote, À demain. At the end.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "",
+          "survival": 0.0
+        }
+      },
+      {
+        "phrase": "I always forget that [fr]le musée[/fr] is masculine.",
+        "span": "le musée",
+        "unprimed": {
+          "heard": "I always forget that. Le musée is masculine.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "I always forget that Le musée is masculine",
+          "survival": 100.0
+        }
+      }
+    ]
+  },
+  {
+    "pair": "en+it",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "priming": "A bilingual lesson mixing English and Italian. Una lezione bilingue che mescola inglese e italiano.",
+    "unprimed_avg": 92.0,
+    "primed_avg": 79.5,
+    "phrases": [
+      {
+        "phrase": "How do you say [it]la biblioteca[/it] in English?",
+        "span": "la biblioteca",
+        "unprimed": {
+          "heard": "How do you say? La biblioteca. In English.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "La biblioteca La biblioteca",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Does [it]ho fame[/it] mean I am hungry?",
+        "span": "ho fame",
+        "unprimed": {
+          "heard": "Does, oh fami, mean I am hungry?",
+          "survival": 50.0
+        },
+        "primed": {
+          "heard": "Does Ufami mean I am hungry?",
+          "survival": 50.0
+        }
+      },
+      {
+        "phrase": "Yesterday I learned the word [it]il binario[/it] in class.",
+        "span": "il binario",
+        "unprimed": {
+          "heard": "Yesterday I learned the word. Il binario. In class.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Yesterday I learned the word il binario in class",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "My favorite phrase is [it]buongiorno a tutti[/it], it sounds friendly.",
+        "span": "buongiorno a tutti",
+        "unprimed": {
+          "heard": "My favorite phrase is, buongiorno a tutti. It sounds friendly.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "My favorite phrase is buongiorno a tutti. It sounds friendly.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "The waiter said [it]il conto, per favore[/it] very fast.",
+        "span": "il conto, per favore",
+        "unprimed": {
+          "heard": "The waiter said, Il conto per favore. Very fast.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "The waiter said, il conto per favore. Very fast.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Is it correct to say [it]mi piace molto[/it] here?",
+        "span": "mi piace molto",
+        "unprimed": {
+          "heard": "Is it correct to say? Mi piace molto. Here.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "is. Is. Is. Is. Is. It correct to say mi piace molto. Here.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "She wrote [it]a domani[/it] at the end.",
+        "span": "a domani",
+        "unprimed": {
+          "heard": "She wrote, addomani at the end.",
+          "survival": 85.7
+        },
+        "primed": {
+          "heard": "She wrote addomani at the end.",
+          "survival": 85.7
+        }
+      },
+      {
+        "phrase": "I always forget that [it]il problema[/it] is masculine.",
+        "span": "il problema",
+        "unprimed": {
+          "heard": "I always forget that. Il problema is masculine.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "",
+          "survival": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "pair": "en+pt",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "priming": "A bilingual lesson mixing English and Portuguese. Uma aula bilíngue que mistura inglês e português.",
+    "unprimed_avg": 73.6,
+    "primed_avg": 40.0,
+    "phrases": [
+      {
+        "phrase": "How do you say [pt]a biblioteca[/pt] in English?",
+        "span": "a biblioteca",
+        "unprimed": {
+          "heard": "How do you say a biblioteca in English?",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "",
+          "survival": 0.0
+        }
+      },
+      {
+        "phrase": "Does [pt]estou com fome[/pt] mean I am hungry?",
+        "span": "estou com fome",
+        "unprimed": {
+          "heard": "Does mean I am hungry?",
+          "survival": 16.7
+        },
+        "primed": {
+          "heard": "does, does, is to conforme, mean I am hungry.",
+          "survival": 25.0
+        }
+      },
+      {
+        "phrase": "Yesterday I learned the word [pt]a madrugada[/pt] in class.",
+        "span": "a madrugada",
+        "unprimed": {
+          "heard": "Yesterday I learned the word. A medrugada. In class.",
+          "survival": 70.0
+        },
+        "primed": {
+          "heard": "Yesterday I learned the word a midrugada in class.",
+          "survival": 70.0
+        }
+      },
+      {
+        "phrase": "My favorite phrase is [pt]bom dia para todos[/pt], it sounds friendly.",
+        "span": "bom dia para todos",
+        "unprimed": {
+          "heard": "My favorite phrase is Bom dia para todos. It sounds friendly.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "My favorite phrase is! My favorite phrase is Bom dia para todos It sounds friendly",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "The waiter said [pt]a conta, por favor[/pt] very fast.",
+        "span": "a conta, por favor",
+        "unprimed": {
+          "heard": "The waiter said, A conta, por favor. Very fast.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "A conta, the waiter said, the waiter said, the waiter said, a!",
+          "survival": 42.9
+        }
+      },
+      {
+        "phrase": "Is it correct to say [pt]eu gosto muito[/pt] here?",
+        "span": "eu gosto muito",
+        "unprimed": {
+          "heard": "Is it correct to say? Eu gosto muito. Here.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "",
+          "survival": 0.0
+        }
+      },
+      {
+        "phrase": "She wrote [pt]até amanhã[/pt] at the end.",
+        "span": "até amanhã",
+        "unprimed": {
+          "heard": "She wrote, At the end.",
+          "survival": 22.2
+        },
+        "primed": {
+          "heard": "She wrote a ceremony at the end.",
+          "survival": 22.2
+        }
+      },
+      {
+        "phrase": "I always forget that [pt]o mapa[/pt] is masculine.",
+        "span": "o mapa",
+        "unprimed": {
+          "heard": "I always forget that. Umapa is masculine.",
+          "survival": 80.0
+        },
+        "primed": {
+          "heard": "I always forget that Umape is masculine.",
+          "survival": 60.0
+        }
+      }
+    ]
+  },
+  {
+    "pair": "en+ru",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "priming": "A bilingual lesson mixing English and Russian. Двуязычный урок, в котором смешиваются английский и русский.",
+    "unprimed_avg": 61.6,
+    "primed_avg": 87.5,
+    "phrases": [
+      {
+        "phrase": "How do you say [ru]библиотека[/ru] in English?",
+        "span": "библиотека",
+        "unprimed": {
+          "heard": "How do you say? Biblio teca. In English.",
+          "survival": 0.0
+        },
+        "primed": {
+          "heard": "How do you say? Библиотека. In English.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Does [ru]я хочу есть[/ru] mean I am hungry?",
+        "span": "я хочу есть",
+        "unprimed": {
+          "heard": "Does, I want to eat, mean I am hungry.",
+          "survival": 0.0
+        },
+        "primed": {
+          "heard": "does, я хочу есть, mean I am hungry.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Yesterday I learned the word [ru]вокзал[/ru] in class.",
+        "span": "вокзал",
+        "unprimed": {
+          "heard": "Yesterday, I learned the word. Вокзал. In class.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Yesterday I learned the word. Вокзал. In class.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "My favorite phrase is [ru]доброе утро[/ru], it sounds friendly.",
+        "span": "доброе утро",
+        "unprimed": {
+          "heard": "My favorite phrase is Доброе утро. It sounds friendly.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "My favorite phrase is доброе утро. It sounds friendly.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "The waiter said [ru]счёт, пожалуйста[/ru] very fast.",
+        "span": "счёт, пожалуйста",
+        "unprimed": {
+          "heard": "The waiter said, «Sчет, пожалуйста».",
+          "survival": 92.9
+        },
+        "primed": {
+          "heard": "Счет, пожалуйста.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Is it correct to say [ru]мне очень нравится[/ru] here?",
+        "span": "мне очень нравится",
+        "unprimed": {
+          "heard": "Мне очень нравится.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Мне очень нравится.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "She wrote [ru]до завтра[/ru] at the end.",
+        "span": "до завтра",
+        "unprimed": {
+          "heard": "She wrote, At the end.",
+          "survival": 0.0
+        },
+        "primed": {
+          "heard": "she wrote dozavtra at the end",
+          "survival": 0.0
+        }
+      },
+      {
+        "phrase": "I always forget the stress in [ru]хорошо[/ru].",
+        "span": "хорошо",
+        "unprimed": {
+          "heard": "Хорошо.",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "I always forget the stress in. Хорошо.",
+          "survival": 100.0
+        }
+      }
+    ]
+  },
+  {
+    "pair": "en+zh",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "priming": "A bilingual lesson mixing English and Chinese. 一节混合英语和中文的双语课。",
+    "unprimed_avg": 68.8,
+    "primed_avg": 56.2,
+    "phrases": [
+      {
+        "phrase": "How do you say [zh]图书馆[/zh] in English?",
+        "span": "图书馆",
+        "unprimed": {
+          "heard": "How do you say?图书馆 In English",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "How do you say? 图书馆。 In English.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Does [zh]我饿了[/zh] mean I am hungry?",
+        "span": "我饿了",
+        "unprimed": {
+          "heard": "does mean I am hungry.",
+          "survival": 0.0
+        },
+        "primed": {
+          "heard": "Does 我饿了? mean I am hungry.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "Yesterday I learned the word [zh]火车站[/zh] in class.",
+        "span": "火车站",
+        "unprimed": {
+          "heard": "Yesterday I learned the word 火车站 In class",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Yesterday I learned the word.! In class.",
+          "survival": 0.0
+        }
+      },
+      {
+        "phrase": "My favorite phrase is [zh]早上好[/zh], it sounds friendly.",
+        "span": "早上好",
+        "unprimed": {
+          "heard": "My favorite phrase is 早上好 It sounds friendly",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "早上好! 早上好 It sounds friendly.",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "The waiter said [zh]买单，谢谢[/zh] very fast.",
+        "span": "买单，谢谢",
+        "unprimed": {
+          "heard": "The waiter said,买单吸血,very fast.",
+          "survival": 50.0
+        },
+        "primed": {
+          "heard": "买单吸血 Very fast",
+          "survival": 50.0
+        }
+      },
+      {
+        "phrase": "Is it correct to say [zh]我很喜欢[/zh] here?",
+        "span": "我很喜欢",
+        "unprimed": {
+          "heard": "Is it correct to say? 我很喜欢 Here",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "Is it correct to say?我很喜欢 Here",
+          "survival": 100.0
+        }
+      },
+      {
+        "phrase": "She wrote [zh]明天见[/zh] at the end.",
+        "span": "明天见",
+        "unprimed": {
+          "heard": "She wrote, At the end.",
+          "survival": 0.0
+        },
+        "primed": {
+          "heard": "She wrote, at the end! music",
+          "survival": 0.0
+        }
+      },
+      {
+        "phrase": "I always forget the tones in [zh]你好[/zh].",
+        "span": "你好",
+        "unprimed": {
+          "heard": "I always forget the tones in. 你好",
+          "survival": 100.0
+        },
+        "primed": {
+          "heard": "",
+          "survival": 0.0
+        }
+      }
+    ]
+  }
+]
