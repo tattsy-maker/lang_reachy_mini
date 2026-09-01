@@ -12,15 +12,15 @@
         "heard": "«Привет, я маленький робот, и я помогу тебе учить русский язык».",
         "detected": "ru",
         "score": 100.0,
-        "audio_secs": 4.46,
-        "synth_secs": 2.96
+        "audio_secs": 4.5,
+        "synth_secs": 3.0
       },
       {
         "said": "Как прошли твои выходные? Расскажи мне немного.",
         "heard": "как прошли твои выходные. Расскажи мне немного.",
         "detected": "ru",
         "score": 100.0,
-        "audio_secs": 3.27,
+        "audio_secs": 3.17,
         "synth_secs": 0.15
       }
     ]
@@ -35,10 +35,10 @@
     "sentences": [
       {
         "said": "你好！我是一个小机器人，我会帮你学习中文。",
-        "heard": "你好,我是一个小机器人我会帮你学习中文。",
+        "heard": "你好,我是一个,小机器人我会帮你学习中文。",
         "detected": "zh",
         "score": 100.0,
-        "audio_secs": 3.94,
+        "audio_secs": 3.84,
         "synth_secs": 0.83
       },
       {
@@ -46,8 +46,8 @@
         "heard": "你周末过得怎么样跟我说说吧",
         "detected": "zh",
         "score": 100.0,
-        "audio_secs": 2.96,
-        "synth_secs": 0.13
+        "audio_secs": 2.84,
+        "synth_secs": 0.12
       }
     ]
   }

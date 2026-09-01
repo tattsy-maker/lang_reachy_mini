@@ -183,11 +183,6 @@ slashes or symbols; write out what you mean instead.
 - **Reply in the language you were spoken to in.** You can speak {languages}. \
 If you are addressed in any other language, answer in English and say plainly \
 that you cannot speak that one yet.
-- When one reply mixes languages, wrap each phrase that is not in the reply's \
-main language in span tags with its two letter code: 'library' is \
-[es]la biblioteca[/es], or thank you is [ru]спасибо[/ru]. The tags pick the \
-voice for that phrase and are never read aloud. Never tag the main language, \
-and never mention the tags.
 
 You have a body, so use it. Call your movement tools naturally as part of \
 talking: nod when you agree, shake your head when you disagree or cannot do \
@@ -211,6 +206,18 @@ what you can see, say so plainly rather than inventing something."""
 # be spoken on this machine: Kokoro's verified set plus whatever Piper
 # voices are on disk (T5). A static list here would make Claude refuse
 # languages the speech stack can in fact speak.
+
+# Local speech mode only: the span-tag convention (T6) that routes each
+# phrase to the right per-language voice. NEVER give this to a
+# speech-to-speech model (cloud mode) -- it has one voice for every
+# language and would read the brackets aloud.
+SPAN_TAG_RULE = """
+- When one reply mixes languages, wrap each phrase that is not in the \
+reply's main language in span tags with its two letter code: 'library' is \
+[es]la biblioteca[/es], or thank you is [ru]спасибо[/ru]. The tags pick \
+the voice for that phrase and are never read aloud. Never tag the main \
+language, and never mention the tags.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -520,7 +527,17 @@ def build_llm_client(args):
 
 
 async def run(args) -> None:
-    api_key, llm_client = build_llm_client(args)
+    # Credentials fail fast, before any model loads: local mode needs
+    # Anthropic, cloud mode needs Google. Neither needs the other's key.
+    api_key = llm_client = google_key = None
+    if args.speech == "local":
+        api_key, llm_client = build_llm_client(args)
+    else:
+        google_key = os.environ.get("GOOGLE_API_KEY")
+        if not google_key:
+            raise SystemExit(
+                "--speech cloud needs GOOGLE_API_KEY, in the environment "
+                "or in voice/.env (get one at https://aistudio.google.com).")
 
     # -- robot ------------------------------------------------------------
     robot = None
@@ -565,37 +582,51 @@ async def run(args) -> None:
     auto_language = args.language == "auto"
     start_lang = "en" if auto_language else args.language
 
-    # Two engines, one voice map: Kokoro's verified languages plus whatever
-    # Piper voices are actually on disk (T5: ru/zh, ~63 MB each, fetched
-    # once -- see piper_tts.py's docstring).
-    args.piper_voices = args.piper_voices or PIPER_VOICES_DIR
-    piper_langs = piper_available(args.piper_voices)
-    if piper_langs:
-        logger.info("piper: %s available (%s)",
-                    ", ".join(v.name for v in piper_langs.values()),
-                    args.piper_voices)
-    speakable = {**LANGUAGES, **piper_langs}
-    if start_lang not in speakable:
-        raise SystemExit("--language %r has no local voice (have: %s)"
-                         % (start_lang, ", ".join(sorted(speakable))))
-    start_voice = args.voice or speakable[start_lang].voice
-    spoken_names = ", ".join(v.name for v in speakable.values())
-    base_prompt = SYSTEM_PROMPT.format(languages=spoken_names)
+    stt = tts = language_router = None
+    if args.speech == "local":
+        # Two engines, one voice map: Kokoro's verified languages plus
+        # whatever Piper voices are actually on disk (T5: ru/zh, ~63 MB
+        # each, fetched once -- see piper_tts.py's docstring).
+        args.piper_voices = args.piper_voices or PIPER_VOICES_DIR
+        piper_langs = piper_available(args.piper_voices)
+        if piper_langs:
+            logger.info("piper: %s available (%s)",
+                        ", ".join(v.name for v in piper_langs.values()),
+                        args.piper_voices)
+        speakable = {**LANGUAGES, **piper_langs}
+        if start_lang not in speakable:
+            raise SystemExit("--language %r has no local voice (have: %s)"
+                             % (start_lang, ", ".join(sorted(speakable))))
+        start_voice = args.voice or speakable[start_lang].voice
+        spoken_names = ", ".join(v.name for v in speakable.values())
+        # The span-tag rule is local-only: per-language voices need it,
+        # a speech-to-speech model would read the brackets aloud.
+        base_prompt = SYSTEM_PROMPT.format(languages=spoken_names) \
+            + SPAN_TAG_RULE
 
-    if auto_language:
-        stt = MultilingualWhisperMLX(
-            settings=MultilingualWhisperMLX.Settings(model=args.whisper_model))
+        if auto_language:
+            stt = MultilingualWhisperMLX(
+                settings=MultilingualWhisperMLX.Settings(
+                    model=args.whisper_model))
+        else:
+            stt = WhisperSTTServiceMLX(
+                settings=WhisperSTTServiceMLX.Settings(
+                    model=args.whisper_model,
+                    language=speakable[start_lang].language))
+        tts = DualEngineTTS(
+            voices_dir=args.piper_voices,
+            settings=DualEngineTTS.Settings(
+                voice=start_voice, language=speakable[start_lang].language))
+        language_router = LanguageRouter(
+            initial=start_lang, voice=args.voice, enabled=auto_language,
+            extra=piper_langs)
     else:
-        stt = WhisperSTTServiceMLX(settings=WhisperSTTServiceMLX.Settings(
-            model=args.whisper_model,
-            language=speakable[start_lang].language))
-    tts = DualEngineTTS(
-        voices_dir=args.piper_voices,
-        settings=DualEngineTTS.Settings(
-            voice=start_voice, language=speakable[start_lang].language))
-    language_router = LanguageRouter(
-        initial=start_lang, voice=args.voice, enabled=auto_language,
-        extra=piper_langs)
+        # Cloud mode (T8): one speech-to-speech model, one voice, native
+        # mixed-language handling -- no tags, no router, no local engines.
+        spoken_names = ("many languages, including English, Spanish, "
+                        "French, Italian, Portuguese, Russian, Mandarin "
+                        "and Hindi")
+        base_prompt = SYSTEM_PROMPT.format(languages=spoken_names)
 
     # Claude Opus 5. Two deliberate choices for a voice loop:
     #
@@ -606,26 +637,28 @@ async def run(args) -> None:
     #    text -- the call silently never runs, with no error. In a robot that
     #    means "nod" gets spoken instead of performed. Low effort is the right
     #    lever; disabling thinking is not.
-    from anthropic import AsyncAnthropic
-    probe = llm_client or AsyncAnthropic(api_key=api_key)
-    extra = {}
-    if await supports_effort(probe, args.model):
-        extra["output_config"] = {"effort": args.effort}
-    else:
-        logger.info("%s does not accept the effort parameter; omitting it",
-                    args.model)
-    if args.fast:
-        extra["speed"] = "fast"
-        extra["betas"] = ["fast-mode-2026-02-01"]
-    llm = AnthropicLLMService(
-        api_key=api_key,
-        model=args.model,
-        client=llm_client,          # set only for --auth oauth; else None
-        params=AnthropicLLMService.InputParams(
-            max_tokens=args.max_tokens,
-            extra=extra,
-        ),
-    )
+    llm = None
+    if args.speech == "local":
+        from anthropic import AsyncAnthropic
+        probe = llm_client or AsyncAnthropic(api_key=api_key)
+        extra = {}
+        if await supports_effort(probe, args.model):
+            extra["output_config"] = {"effort": args.effort}
+        else:
+            logger.info("%s does not accept the effort parameter; "
+                        "omitting it", args.model)
+        if args.fast:
+            extra["speed"] = "fast"
+            extra["betas"] = ["fast-mode-2026-02-01"]
+        llm = AnthropicLLMService(
+            api_key=api_key,
+            model=args.model,
+            client=llm_client,      # set only for --auth oauth; else None
+            params=AnthropicLLMService.InputParams(
+                max_tokens=args.max_tokens,
+                extra=extra,
+            ),
+        )
 
     # Each FunctionSchema carries its own handler, so pipecat dispatches
     # straight from the schema. Calling register_function() as well is
@@ -711,8 +744,9 @@ async def run(args) -> None:
     # is why a thinking pause mid-sentence does not get treated as your turn
     # ending -- silence alone is a bad end-of-turn signal for natural speech.
     # Both run locally, so neither costs a network round trip.
+    # Cloud mode leaves turn detection to Gemini's own server-side VAD.
     turn_strategies = None
-    if not args.no_smart_turn:
+    if args.speech == "local" and not args.no_smart_turn:
         turn_strategies = UserTurnStrategies(
             stop=[TurnAnalyzerUserTurnStopStrategy(
                 turn_analyzer=LocalSmartTurnAnalyzerV3())],
@@ -734,30 +768,71 @@ async def run(args) -> None:
     if not args.no_mute:
         mute_strategies = [AlwaysUserMuteStrategy(), FunctionCallUserMuteStrategy()]
 
-    aggregators = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(
-                params=VADParams(stop_secs=args.stop_secs)),
-            user_turn_strategies=turn_strategies,
-            user_mute_strategies=mute_strategies,
-        ),
-    )
+    if args.speech == "local":
+        aggregators = LLMContextAggregatorPair(
+            context,
+            user_params=LLMUserAggregatorParams(
+                vad_analyzer=SileroVADAnalyzer(
+                    params=VADParams(stop_secs=args.stop_secs)),
+                user_turn_strategies=turn_strategies,
+                user_mute_strategies=mute_strategies,
+            ),
+        )
+    else:
+        # No local VAD or smart-turn: the speech-to-speech service hears
+        # raw audio and decides turns itself. The self-hearing mutes stay:
+        # Gemini supports barge-in, but the robot's speaker and mic are
+        # centimetres apart with no echo cancellation, so full-duplex is
+        # off until the booth mic proves otherwise (T11 decides).
+        aggregators = LLMContextAggregatorPair(
+            context,
+            user_params=LLMUserAggregatorParams(
+                user_mute_strategies=mute_strategies,
+            ),
+        )
 
     embodiment = Embodiment(robot, enabled=robot is not None,
                             sway=not args.no_sway)
 
-    pipeline = Pipeline([
-        transport.input(),
-        stt,
-        language_router,     # switches the voice to match what was heard
-        aggregators.user(),
-        llm,
-        tts,
-        embodiment,          # observes speaking state, passes frames through
-        transport.output(),
-        aggregators.assistant(),
-    ])
+    if args.speech == "cloud":
+        # T8: the three local speech stages collapse into one streaming
+        # speech-to-speech service; motion + memory tools ride along.
+        from pipecat.services.google.gemini_live.llm import (
+            GeminiLiveLLMService,
+        )
+        gemini_kwargs = dict(
+            api_key=google_key,
+            system_instruction=system_prompt,
+        )
+        if args.gemini_model:
+            gemini_kwargs["model"] = args.gemini_model
+        if args.gemini_voice:
+            gemini_kwargs["voice_id"] = args.gemini_voice
+        if tools:
+            gemini_kwargs["tools"] = tools
+        gemini = GeminiLiveLLMService(**gemini_kwargs)
+        logger.info("speech: cloud (Gemini Live, model %s)",
+                    args.gemini_model or "pipecat default")
+        pipeline = Pipeline([
+            transport.input(),
+            aggregators.user(),
+            gemini,
+            embodiment,      # observes speaking state, passes frames through
+            transport.output(),
+            aggregators.assistant(),
+        ])
+    else:
+        pipeline = Pipeline([
+            transport.input(),
+            stt,
+            language_router,  # switches the voice to match what was heard
+            aggregators.user(),
+            llm,
+            tts,
+            embodiment,      # observes speaking state, passes frames through
+            transport.output(),
+            aggregators.assistant(),
+        ])
 
     task = PipelineTask(pipeline, params=PipelineParams(
         audio_in_sample_rate=args.sample_rate,
@@ -766,7 +841,7 @@ async def run(args) -> None:
         enable_usage_metrics=True,
     ))
 
-    if not args.no_warmup:
+    if args.speech == "local" and not args.no_warmup:
         await warm_up(stt, tts, args.sample_rate)
 
     # Session lifecycle (T10): a background task watches the face source
@@ -871,6 +946,20 @@ def build_parser() -> argparse.ArgumentParser:
                         "on the robot's own mic it will hear itself.")
     g.add_argument("--no-smart-turn", action="store_true",
                    help="use VAD silence alone instead of the smart-turn model")
+
+    g = p.add_argument_group("speech mode")
+    g.add_argument("--speech", default="local", choices=["local", "cloud"],
+                   help="local (default): Whisper + Claude + Kokoro/Piper "
+                        "on this machine. cloud: one Gemini Live "
+                        "speech-to-speech stream (needs GOOGLE_API_KEY; "
+                        "raw audio leaves the machine; the tutor brain is "
+                        "Gemini, not Claude)")
+    g.add_argument("--gemini-model", default=None, metavar="MODEL",
+                   help="Gemini Live model id for --speech cloud "
+                        "(default: pipecat's current default)")
+    g.add_argument("--gemini-voice", default=None, metavar="VOICE",
+                   help="Gemini Live voice for --speech cloud "
+                        "(default: the service's default)")
 
     g = p.add_argument_group("model (cloud)")
     g.add_argument("--auth", default="api-key", choices=["api-key", "oauth"],

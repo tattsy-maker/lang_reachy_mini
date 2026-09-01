@@ -45,7 +45,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T5 | Piper TTS + per-language engine routing | T0 | done | 2026-08-31 |
 | T6 | Mixed-language TTS assembly | T5 | done | 2026-08-31 |
 | T7 | Mixed-language STT hardening | T0 | done | 2026-08-31 |
-| T8 | Cloud speech mode (Gemini Live) | T4 | todo | — |
+| T8 | Cloud speech mode (Gemini Live) | T4 | in progress | 2026-08-31 |
 | T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
 | T10 | Session lifecycle | T2, T4, T9 | done | 2026-08-31 |
 | T11 | Faire hardening & dress rehearsal | all | todo | — |
@@ -381,7 +381,12 @@ cloud-mode tutoring tone spot-checked against the briefing (spec risk:
 "the prompt work doesn't automatically carry over").
 
 **Progress log.**
-- —
+- 2026-08-31 — wired and key-ready, **blocked on `GOOGLE_API_KEY` in
+  voice/.env**: `--speech cloud` builds the Gemini Live pipeline with the
+  same briefing and tools, fails fast without the key (tested), and its
+  three live tests are written and skip cleanly. Local mode regression
+  green. Span tags made local-only (a speech-to-speech voice would read
+  brackets aloud). Remaining steps in [progress/T8.md](progress/T8.md).
 
 ---
 
