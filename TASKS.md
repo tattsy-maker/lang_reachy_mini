@@ -38,14 +38,14 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | ID | Task | Depends on | Status | Last update |
 |----|------|-----------|--------|-------------|
 | T0 | Test harness & fixtures | — | done | 2026-08-31 |
-| T1 | Camera capture module | T0 | done | 2026-08-31 |
+| T1 | Camera capture module | T0 | verified-on-metal | 2026-08-31 |
 | T2 | Face recognition core | T0, T1 | done | 2026-08-31 |
 | T3 | Learner store | T0 | done | 2026-08-31 |
 | T4 | Tutor mode: briefing + memory tools | T0, T3 | done | 2026-08-31 |
 | T5 | Piper TTS + per-language engine routing | T0 | done | 2026-08-31 |
 | T6 | Mixed-language TTS assembly | T5 | done | 2026-08-31 |
 | T7 | Mixed-language STT hardening | T0 | done | 2026-08-31 |
-| T8 | Cloud speech mode (Gemini Live) | T4 | in progress | 2026-08-31 |
+| T8 | Cloud speech mode (Gemini Live) | T4 | done | 2026-08-31 |
 | T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
 | T10 | Session lifecycle | T2, T4, T9 | done | 2026-08-31 |
 | T11 | Faire hardening & dress rehearsal | all | in progress | 2026-08-31 |
@@ -122,9 +122,14 @@ exercised once on hardware or explicitly logged as blocked.
 **Progress log.**
 - 2026-08-31 — done; file-source path fully tested (7 passed, 1 skip).
   Face deps live in `voice/.venv` (OpenCV coexists with pipecat; verified).
-  Real-camera grab is **blocked**: altha lacks `video` group membership and
-  sudo needs a password — one-liner fix documented in
+  Real-camera grab was blocked on `video` group membership — documented in
   [progress/T1.md](progress/T1.md).
+- 2026-08-31 (later) — **verified on metal** after the usermod:
+  `check_camera.py` saved a real 1920×1080 frame from `/dev/video0`
+  (dark room, mean brightness 24.6 — still clears the non-black check)
+  and all 8 tests pass including the robot-marked one. Note: this
+  session's shells predate the usermod, so everything camera ran under
+  `sg video -c`; fresh logins won't need that.
 
 ---
 
@@ -381,12 +386,19 @@ cloud-mode tutoring tone spot-checked against the briefing (spec risk:
 "the prompt work doesn't automatically carry over").
 
 **Progress log.**
-- 2026-08-31 — wired and key-ready, **blocked on `GOOGLE_API_KEY` in
-  voice/.env**: `--speech cloud` builds the Gemini Live pipeline with the
-  same briefing and tools, fails fast without the key (tested), and its
-  three live tests are written and skip cleanly. Local mode regression
-  green. Span tags made local-only (a speech-to-speech voice would read
-  brackets aloud). Remaining steps in [progress/T8.md](progress/T8.md).
+- 2026-08-31 — wired and key-ready, blocked on a Google key: `--speech
+  cloud` builds the Gemini Live pipeline with the same briefing and tools,
+  fails fast without the key (tested). Span tags made local-only (a
+  speech-to-speech voice would read brackets aloud).
+- 2026-08-31 (later) — **done**: key arrived (as `GEMINI_API_KEY`, now
+  accepted alongside `GOOGLE_API_KEY`; model
+  `models/gemini-3.1-flash-live-preview`). All 4 tests pass live: audio
+  reply, goodbye→well-formed notes, nod on the stub robot. Two-turn
+  tutor session verified: TTFB **0.6–1.7 s** (vs ~2.7–5 s local), opening
+  picked up the seeded notes, walk-away-quality notes written. Two real
+  findings fixed on the way — multi-turn text injection and Gemini's
+  tool-call discipline — details in [progress/T8.md](progress/T8.md).
+  Live-mic cloud conversation deferred to the T11 rehearsal.
 
 ---
 

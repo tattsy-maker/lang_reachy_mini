@@ -61,6 +61,12 @@ else
 fi
 
 say "-- starting robot serve (zenoh $ZENOH_LISTEN) --"
+# Both logs are append-only (runbook), so a grep over the whole file would
+# match a PREVIOUS run's readiness lines. Only read lines from this run.
+SERVE_OFFSET=$(wc -l < "$SERVE_LOG" 2>/dev/null || echo 0)
+AGENT_OFFSET=$(wc -l < "$AGENT_LOG" 2>/dev/null || echo 0)
+fresh() { tail -n "+$(($2 + 1))" "$1" 2>/dev/null; }
+
 start_serve() {
     .venv/bin/python controller.py serve --zenoh-listen "$ZENOH_LISTEN" \
         >> "$SERVE_LOG" 2>&1 &
@@ -75,31 +81,43 @@ for i in $(seq 1 30); do
         sleep 3
         start_serve
     fi
-    grep -qs "\[reachy\] serving" "$SERVE_LOG" && break
+    fresh "$SERVE_LOG" "$SERVE_OFFSET" | grep -q "\[reachy\] serving" && break
     sleep 1
 done
 kill -0 "$SERVE_PID" 2>/dev/null || die "serve did not stay up; tail $SERVE_LOG"
 ok "serve up (pid $SERVE_PID)"
 
 say "-- starting voice agent (model $MODEL) --"
-say "   warmup is ~40s; wait for 'ready -- say something' below"
-(
-  cd voice
-  .venv/bin/python agent.py \
-      --broker "$BROKER" \
-      --model "$MODEL" \
-      --audio-device "$AUDIO_DEVICE" \
-      "${SESSION_FLAGS[@]}" \
-      ${BOOTH_EXTRA_AGENT:-} \
-      >> run.log 2>&1
-) &
+say "   warmup is ~40s cold, seconds when the daemon is warm"
+# Directly exec python (no subshell): the shutdown trap must SIGINT the
+# real agent process, not a wrapper that would swallow the signal.
+voice/.venv/bin/python voice/agent.py \
+    --broker "$BROKER" \
+    --model "$MODEL" \
+    --audio-device "$AUDIO_DEVICE" \
+    "${SESSION_FLAGS[@]}" \
+    ${BOOTH_EXTRA_AGENT:-} \
+    >> "$AGENT_LOG" 2>&1 &
 AGENT_PID=$!
 
+# SIGINT then wait, with a bounded patience -- never SIGKILL first
+# (cleanup returns the robot to neutral and hands media back).
+stop() { # pid, name, seconds
+    kill -INT "$1" 2>/dev/null || return 0
+    for i in $(seq 1 "$3"); do
+        kill -0 "$1" 2>/dev/null || return 0
+        sleep 1
+    done
+    warn "$2 ignored SIGINT for $3 s; killing it"
+    kill -9 "$1" 2>/dev/null
+}
+
 cleanup() {
+    trap - EXIT INT TERM
     say ""
     say "-- shutting down (SIGINT everywhere; exit code 1 afterwards is normal) --"
-    kill -INT "$AGENT_PID" 2>/dev/null; wait "$AGENT_PID" 2>/dev/null
-    kill -INT "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null
+    stop "$AGENT_PID" "agent" 25
+    stop "$SERVE_PID" "serve" 15
     if [ -z "${BOOTH_KEEP_GUESTS:-}" ]; then
         say "-- end of day: wiping guest profiles (family survives) --"
         python3 tutor/wipe_guests.py || true
@@ -111,11 +129,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 for i in $(seq 1 90); do
-    grep -qs "ready -- say something" "$AGENT_LOG" && break
+    fresh "$AGENT_LOG" "$AGENT_OFFSET" | grep -q "ready -- say something" && break
     kill -0 "$AGENT_PID" 2>/dev/null || die "agent died; tail $AGENT_LOG"
     sleep 1
 done
-grep -qs "ready -- say something" "$AGENT_LOG" \
+fresh "$AGENT_LOG" "$AGENT_OFFSET" | grep -q "ready -- say something" \
     && ok "agent ready -- the booth is live" \
     || die "agent never reached ready; tail $AGENT_LOG"
 

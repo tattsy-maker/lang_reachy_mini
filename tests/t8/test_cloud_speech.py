@@ -20,10 +20,13 @@ from tutor.store import LearnerStore  # noqa: E402
 
 @pytest.mark.models
 def test_cloud_mode_fails_fast_and_clearly_without_key(paths):
+    # Blank (not absent) keys: load_env_file never overrides an existing
+    # env var, so this keeps a real key in voice/.env from leaking in.
     out = subprocess.run(
         [str(paths.voice_py), "agent.py", "--speech", "cloud", "--no-robot"],
         cwd=paths.voice_dir, capture_output=True, text=True, timeout=120,
-        env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home())})
+        env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home()),
+             "GOOGLE_API_KEY": "", "GEMINI_API_KEY": ""})
     assert out.returncode != 0
     blob = out.stdout + out.stderr
     assert "GOOGLE_API_KEY" in blob, \

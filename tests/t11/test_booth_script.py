@@ -29,9 +29,9 @@ def test_signage_covers_the_disclosures(paths):
 @pytest.mark.models
 @pytest.mark.audio
 def test_booth_script_comes_up_and_sigints_clean(paths):
-    if not os.access("/dev/video0", os.R_OK):
-        pytest.skip("no read access to /dev/video0 "
-                    "(needs 'video' group; see face/camera.py)")
+    # No camera-permission gate: without video access the script degrades
+    # to running without face recognition (and says so), which still
+    # exercises everything this smoke test asserts.
     env = dict(os.environ, BOOTH_KEEP_GUESTS="1",
                BOOTH_EXTRA_AGENT="--deaf")
     proc = subprocess.Popen(["bash", str(paths.repo / "start_booth.sh")],

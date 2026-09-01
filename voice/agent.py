@@ -533,11 +533,14 @@ async def run(args) -> None:
     if args.speech == "local":
         api_key, llm_client = build_llm_client(args)
     else:
-        google_key = os.environ.get("GOOGLE_API_KEY")
+        # Google's SDK accepts either name; so do we.
+        google_key = (os.environ.get("GOOGLE_API_KEY")
+                      or os.environ.get("GEMINI_API_KEY"))
         if not google_key:
             raise SystemExit(
-                "--speech cloud needs GOOGLE_API_KEY, in the environment "
-                "or in voice/.env (get one at https://aistudio.google.com).")
+                "--speech cloud needs GOOGLE_API_KEY (or GEMINI_API_KEY), "
+                "in the environment or in voice/.env "
+                "(get one at https://aistudio.google.com).")
 
     # -- robot ------------------------------------------------------------
     robot = None
@@ -626,7 +629,14 @@ async def run(args) -> None:
         spoken_names = ("many languages, including English, Spanish, "
                         "French, Italian, Portuguese, Russian, Mandarin "
                         "and Hindi")
-        base_prompt = SYSTEM_PROMPT.format(languages=spoken_names)
+        # Measured (progress/T8.md): Gemini Live sometimes speaks the
+        # goodbye but skips the save_session_notes call the briefing
+        # demands. Claude does not need this reminder; Gemini does.
+        base_prompt = SYSTEM_PROMPT.format(languages=spoken_names) + """
+Tool discipline: your tools are real actions, not things to mention. \
+Whenever your instructions say to call a tool at a moment (for example \
+save_session_notes when the student says goodbye), you must actually \
+emit the tool call in that same turn, alongside anything you say."""
 
     # Claude Opus 5. Two deliberate choices for a voice loop:
     #
@@ -868,9 +878,22 @@ async def run(args) -> None:
                 await asyncio.sleep(args.say_delay if i == 0 else args.say_gap)
                 logger.info("injecting utterance %d/%d: %r",
                             i + 1, len(args.say), utterance)
-                await task.queue_frames([LLMMessagesAppendFrame(
-                    messages=[{"role": "user", "content": utterance}],
-                    run_llm=True)])
+                if args.speech == "cloud" and i > 0:
+                    # The FIRST turn must go through the aggregator: it
+                    # seeds the service's context object (without which
+                    # Gemini's tool calls are refused) and triggers the
+                    # initial inference. But Gemini Live keeps conversation
+                    # state server-side and ignores LATER context updates
+                    # (_handle_context in pipecat's gemini_live llm.py), so
+                    # a second --say through the aggregator vanishes. Later
+                    # turns use the service's own text-injection path,
+                    # which sends client content + the Gemini-3 nudge.
+                    await gemini._create_single_response(
+                        [{"role": "user", "content": utterance}])
+                else:
+                    await task.queue_frames([LLMMessagesAppendFrame(
+                        messages=[{"role": "user", "content": utterance}],
+                        run_llm=True)])
         asyncio.create_task(kickoff())
 
     logger.info("ready -- say something. Ctrl-C to stop.")
@@ -954,9 +977,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "speech-to-speech stream (needs GOOGLE_API_KEY; "
                         "raw audio leaves the machine; the tutor brain is "
                         "Gemini, not Claude)")
-    g.add_argument("--gemini-model", default=None, metavar="MODEL",
-                   help="Gemini Live model id for --speech cloud "
-                        "(default: pipecat's current default)")
+    g.add_argument("--gemini-model",
+                   default="models/gemini-3.1-flash-live-preview",
+                   metavar="MODEL",
+                   help="Gemini Live model id for --speech cloud")
     g.add_argument("--gemini-voice", default=None, metavar="VOICE",
                    help="Gemini Live voice for --speech cloud "
                         "(default: the service's default)")

@@ -81,8 +81,9 @@ def _skip_reason(marker: str) -> str | None:
         if not _env_or_dotenv("ANTHROPIC_API_KEY"):
             return "no ANTHROPIC_API_KEY in environment or voice/.env"
     elif marker == "google":
-        if not _env_or_dotenv("GOOGLE_API_KEY"):
-            return "no GOOGLE_API_KEY in environment or voice/.env"
+        if not (_env_or_dotenv("GOOGLE_API_KEY")
+                or _env_or_dotenv("GEMINI_API_KEY")):
+            return "no GOOGLE_API_KEY/GEMINI_API_KEY in environment or voice/.env"
     elif marker == "audio":
         cards = Path("/proc/asound/cards")
         try:
