@@ -85,13 +85,18 @@ def embed(image) -> np.ndarray | None:
     return np.asarray(largest.normed_embedding, dtype=np.float32)
 
 
+def enroll_from_vectors(vectors) -> np.ndarray:
+    """Average several embeddings of one person into one, re-normalized."""
+    mean = np.mean(np.asarray(vectors, dtype=np.float32), axis=0)
+    return (mean / np.linalg.norm(mean)).astype(np.float32)
+
+
 def enroll(images) -> np.ndarray | None:
     """Average embedding across several images of the same person."""
     vectors = [v for v in (embed(img) for img in images) if v is not None]
     if not vectors:
         return None
-    mean = np.mean(vectors, axis=0)
-    return (mean / np.linalg.norm(mean)).astype(np.float32)
+    return enroll_from_vectors(vectors)
 
 
 def similarity(a, b) -> float:
@@ -145,6 +150,14 @@ def _cmd_matrix(args) -> dict:
     return {"provider": provider_report(), "faces": faces, "scores": scores}
 
 
+def _cmd_embed(args) -> dict:
+    import cv2
+    vector = embed(cv2.imread(args.image))
+    if vector is None:
+        return {"embedding": None}
+    return {"embedding": [round(float(x), 6) for x in vector]}
+
+
 def _cmd_identify(args) -> dict:
     import cv2
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -177,6 +190,8 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     m = sub.add_parser("matrix", help="pairwise scores for a dir of images")
     m.add_argument("dir")
+    e = sub.add_parser("embed", help="embedding of the largest face, JSON")
+    e.add_argument("image")
     i = sub.add_parser("identify",
                        help="enroll from images, identify in a video/dir")
     i.add_argument("--enroll", required=True,
@@ -189,9 +204,10 @@ def main() -> int:
     # InsightFace and ONNX Runtime chat on stdout while loading; keep stdout
     # pure JSON for callers by diverting everything else to stderr.
     import contextlib
+    commands = {"matrix": _cmd_matrix, "embed": _cmd_embed,
+                "identify": _cmd_identify}
     with contextlib.redirect_stdout(sys.stderr):
-        result = (_cmd_matrix(args) if args.cmd == "matrix"
-                  else _cmd_identify(args))
+        result = commands[args.cmd](args)
     print(json.dumps(result, indent=2))
     return 0 if "error" not in result else 1
 

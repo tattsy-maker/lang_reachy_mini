@@ -13,6 +13,7 @@ this module must import it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -83,7 +84,48 @@ was practiced, what {name} struggled with including the correction, what \
 clicked, and what to open with next time. If this session showed clearly \
 that {name}'s stored level is wrong, also call update_learner_level.
 
+If {name} ever asks to be forgotten, call forget_me, then confirm out loud \
+that their file is deleted on the spot.
+
 {notes_section}"""
+
+# Briefing when a face is present but matches nobody in the store (T9).
+STRANGER_BRIEFING = """
+
+You are in tutor mode, but you do not recognize the person in front of \
+you. You are a friendly language tutor in a small robot body.
+
+- Greet them warmly in English and introduce yourself as a language tutor.
+- If they would like a lesson, first ask, in these words or close to them: \
+"Would you like me to remember you for the rest of the day?" You need a \
+clear yes before anything about them is stored.
+- If they agree, ask their name and which language they want to practice \
+({languages}), then call enroll_new_learner. When it succeeds, greet them \
+by name and start a short first lesson, beginner level unless they say \
+otherwise.
+- If they decline, that is completely fine. Chat normally, store nothing, \
+and do not ask again.
+- If they were enrolled and say goodbye, call save_session_notes as usual. \
+If they ask to be forgotten, call forget_me and confirm out loud.
+"""
+
+# Briefing when the best face match lands in the ask-don't-guess band.
+UNSURE_BRIEFING = """
+
+You are in tutor mode. The person in front of you might be {name}, one of \
+your students, but you are not certain, and a wrong greeting is worse than \
+asking.
+
+- Do NOT use their name as if you were sure, and do not mention their \
+lesson history yet.
+- Open in English by asking, warmly: "{name}, is that you?"
+- If they confirm, call confirm_identity and continue as their tutor using \
+what it returns.
+- If they say no, apologize lightly, then treat them as someone new: offer \
+a lesson, ask "Would you like me to remember you for the rest of the \
+day?", and on a clear yes ask their name and language and call \
+enroll_new_learner. If they decline, chat normally and store nothing.
+"""
 
 
 def language_name(code: str) -> str:
@@ -148,14 +190,40 @@ def load_learner(root: str, name_or_id: str) -> tuple[Learner, str, LearnerStore
     return learner, notes, store
 
 
-def build_tutor_tools(store: LearnerStore, learner: Learner) -> list:
+class CurrentLearner:
+    """The mutable identity slot every tutor tool reads. ``--learner``
+    fills it at startup; face recognition fills it when sure; and
+    confirm_identity / enroll_new_learner fill it mid-conversation."""
+
+    def __init__(self, learner: Learner | None = None):
+        self.learner = learner
+
+
+def normalize_language(value: str) -> str | None:
+    """'es' or 'Spanish' (any case) -> 'es'; None when unrecognized."""
+    value = value.strip().lower()
+    if value in _LANGUAGE_NAMES:
+        return value
+    for code, name in _LANGUAGE_NAMES.items():
+        if value == name.lower():
+            return code
+    return None
+
+
+def build_tutor_tools(store: LearnerStore, holder: CurrentLearner) -> list:
     """The memory tools, same FunctionSchema style as the motion tools."""
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
-    saved = {"done": False}
+    saved_ids: set[str] = set()
 
     async def save_session_notes(params):
-        if saved["done"]:
+        learner = holder.learner
+        if learner is None:
+            await params.result_callback(
+                {"saved": False,
+                 "reason": "no learner identified or enrolled this session"})
+            return
+        if learner.id in saved_ids:
             # The prompt says "exactly once"; make a second call harmless
             # rather than trusting the model with duplicate entries.
             await params.result_callback(
@@ -169,13 +237,17 @@ def build_tutor_tools(store: LearnerStore, learner: Learner) -> list:
             f"- **Next time:** {a.get('next_time', '').strip()}",
         ])
         updated = store.append_session(learner.id, body)
-        saved["done"] = True
+        saved_ids.add(learner.id)
         logger.info("tutor: saved session notes for %s (now %d sessions)",
                     learner.id, updated.sessions)
         await params.result_callback(
             {"saved": True, "session": updated.sessions})
 
     async def update_learner_level(params):
+        learner = holder.learner
+        if learner is None:
+            await params.result_callback({"error": "no learner identified"})
+            return
         level = str(params.arguments.get("level", "")).strip().lower()
         if level not in LEVELS:
             await params.result_callback(
@@ -193,8 +265,28 @@ def build_tutor_tools(store: LearnerStore, learner: Learner) -> list:
                     learner.id, old, level)
         await params.result_callback({"level": level, "was": old})
 
-    text = {"type": "string"}
+    async def forget_me(params):
+        learner = holder.learner
+        if learner is None:
+            await params.result_callback(
+                {"error": "nobody is identified, there is nothing to forget"})
+            return
+        store.delete(learner.id)
+        holder.learner = None
+        saved_ids.discard(learner.id)
+        logger.info("tutor: forgot learner %s on request", learner.id)
+        await params.result_callback(
+            {"forgotten": True, "name": learner.name})
+
     return [
+        FunctionSchema(
+            name="forget_me",
+            description="Delete everything stored about the current person "
+                        "-- profile, face data, and notes -- immediately. "
+                        "Only when they explicitly ask to be forgotten. "
+                        "Confirm out loud afterwards.",
+            properties={}, required=[], handler=forget_me,
+        ),
         FunctionSchema(
             name="save_session_notes",
             description="Save your end-of-session notes to the student's "
@@ -228,3 +320,108 @@ def build_tutor_tools(store: LearnerStore, learner: Learner) -> list:
             handler=update_learner_level,
         ),
     ]
+
+
+def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
+                           face_source, candidate: Learner | None = None
+                           ) -> list:
+    """enroll_new_learner (always) and confirm_identity (only when face
+    recognition produced an unsure ``candidate``). Registered alongside the
+    memory tools whenever the agent has a face source."""
+    from pipecat.adapters.schemas.function_schema import FunctionSchema
+
+    async def enroll_new_learner(params):
+        if holder.learner is not None:
+            # One person per session; a duplicate call must not mint a
+            # second profile (T10 resets the holder between visitors).
+            await params.result_callback(
+                {"enrolled": False,
+                 "reason": f"already tutoring {holder.learner.name} -- "
+                           "they are enrolled and remembered"})
+            return
+        a = params.arguments
+        name = str(a.get("name", "")).strip()
+        if not name:
+            await params.result_callback({"error": "a name is required"})
+            return
+        language = normalize_language(str(a.get("target_language", "")))
+        if language is None:
+            await params.result_callback(
+                {"error": "unrecognized language; supported: "
+                          + ", ".join(sorted(_LANGUAGE_NAMES.values()))})
+            return
+        level = str(a.get("level", "beginner")).strip().lower()
+        if level not in LEVELS:
+            level = "beginner"
+
+        from face_id import capture_embedding
+        vector = await asyncio.to_thread(capture_embedding, face_source)
+        if vector is None:
+            await params.result_callback(
+                {"error": "no face visible right now; ask them to look at "
+                          "you and try once more"})
+            return
+        learner = store.create(name, language, level=level, tier="guest",
+                               embedding=[float(x) for x in vector])
+        holder.learner = learner
+        logger.info("tutor: enrolled new guest %s (%s, %s)",
+                    learner.id, language, level)
+        await params.result_callback(
+            {"enrolled": True, "name": learner.name, "id": learner.id,
+             "target_language": language, "level": level,
+             "note": "you are now their tutor; greet them by name and "
+                     "begin a short first lesson"})
+
+    async def confirm_identity(params):
+        if candidate is None:
+            await params.result_callback(
+                {"error": "there is no identity candidate to confirm"})
+            return
+        learner = store.load(candidate.id)
+        if learner is None:
+            await params.result_callback({"error": "learner vanished"})
+            return
+        holder.learner = learner
+        notes = store.read_notes(learner.id, max_sessions=BRIEFING_SESSIONS)
+        logger.info("tutor: identity confirmed as %s", learner.id)
+        await params.result_callback(
+            {"confirmed": learner.name,
+             "target_language": language_name(learner.target_language),
+             "level": learner.level,
+             "sessions": learner.sessions,
+             "recent_notes": notes,
+             "note": "greet them by name in their target language and pick "
+                     "up where the notes leave off"})
+
+    tools = [
+        FunctionSchema(
+            name="enroll_new_learner",
+            description="Create a guest learner profile and capture their "
+                        "face so they are remembered for the rest of the "
+                        "day. Only after they clearly said yes to being "
+                        "remembered, and only once you know their name and "
+                        "chosen language.",
+            properties={
+                "name": {"type": "string",
+                         "description": "their name, as they said it"},
+                "target_language": {
+                    "type": "string",
+                    "description": "language to practice, e.g. 'Spanish' "
+                                   "or 'es'"},
+                "level": {"type": "string", "enum": list(LEVELS),
+                          "description": "their level if stated; default "
+                                         "beginner"},
+            },
+            required=["name", "target_language"],
+            handler=enroll_new_learner,
+        ),
+    ]
+    if candidate is not None:
+        tools.append(FunctionSchema(
+            name="confirm_identity",
+            description=f"The person confirmed they are {candidate.name}. "
+                        "Call this to load their profile and notes, then "
+                        "continue as their tutor.",
+            properties={}, required=[], handler=confirm_identity,
+        ))
+    return tools

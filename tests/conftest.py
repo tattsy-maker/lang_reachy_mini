@@ -224,9 +224,11 @@ def run_agent_say():
     procs: list[subprocess.Popen] = []
 
     def run(utterances, wait_for=r"Generating TTS \[", timeout=240.0,
-            settle=8.0, extra_args=()):
+            settle=8.0, extra_args=(), deaf=True, also_wait_for=None):
         cmd = [str(VOICE_PY), "agent.py", "--no-robot", "--no-warmup",
                "--say-delay", "2"]
+        if deaf:
+            cmd.append("--deaf")  # scripted runs must not hear the room
         for u in utterances:
             cmd += ["--say", u]
         cmd += list(extra_args)
@@ -235,6 +237,9 @@ def run_agent_say():
         procs.append(proc)
         tail = LogTail(proc.stdout)
         found = tail.wait_for(wait_for, timeout, proc=proc)
+        if found and also_wait_for:
+            # two-phase wait: e.g. a tool firing, then the spoken reply
+            found = tail.wait_for(also_wait_for, 45.0, proc=proc)
         if found:
             time.sleep(settle)  # let the reply actually play out
         _sigint_and_wait(proc)

@@ -46,7 +46,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T6 | Mixed-language TTS assembly | T5 | todo | — |
 | T7 | Mixed-language STT hardening | T0 | todo | — |
 | T8 | Cloud speech mode (Gemini Live) | T4 | todo | — |
-| T9 | Conversational enrollment | T2, T3, T4 | todo | — |
+| T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
 | T10 | Session lifecycle | T2, T4, T9 | todo | — |
 | T11 | Faire hardening & dress rehearsal | all | todo | — |
 
@@ -397,7 +397,12 @@ enrolls by voice; comes back and is greeted by name.
 once and logged.
 
 **Progress log.**
-- —
+- 2026-08-31 — scripted path fully tested (5 green: enroll with consent →
+  re-recognized in the same video; no-thanks stores nothing; manufactured
+  unsure-band → "Maria, is that you?" → confirm; forget-me deletes with
+  spoken confirmation). Live in-person run **blocked on `video` group**
+  (same one-liner as T1). Added `--deaf` (agent ignores the mic) after
+  room noise made scripted runs flaky. [progress/T9.md](progress/T9.md).
 
 ---
 

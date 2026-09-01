@@ -84,8 +84,14 @@ from multilingual import (                                              # noqa: 
     MultilingualWhisperMLX,
 )
 from tutor_mode import (                                                # noqa: E402
+    BRIEFING_SESSIONS,
     DEFAULT_LEARNERS_ROOT,
+    STRANGER_BRIEFING,
+    UNSURE_BRIEFING,
+    CurrentLearner,
+    LearnerStore,
     build_briefing,
+    build_enrollment_tools,
     build_tutor_tools,
     load_learner,
 )
@@ -519,8 +525,11 @@ async def run(args) -> None:
     logger.info("audio: input_device=%s output_device=%s (%r)",
                 in_idx, out_idx, args.audio_device)
 
+    # --deaf: never open the microphone. Scripted --say runs otherwise pick
+    # up room noise as phantom user turns (Whisper will happily transcribe a
+    # hallway), which makes them nondeterministic.
     transport = LocalAudioTransport(LocalAudioTransportParams(
-        audio_in_enabled=True,
+        audio_in_enabled=not args.deaf,
         audio_out_enabled=True,
         audio_in_sample_rate=args.sample_rate,
         audio_out_sample_rate=args.sample_rate,
@@ -587,17 +596,48 @@ async def run(args) -> None:
     # redundant and pipecat warns about it.
     tools = build_tools(robot) if robot else []
 
-    # Tutor mode: append the learner's briefing to the system prompt and
-    # register the memory tools next to the motion tools. Works with or
-    # without a robot -- the memory tools only touch the learner store.
+    # Tutor mode: append the right briefing to the system prompt and
+    # register the memory (and, with a face source, enrollment) tools next
+    # to the motion tools. Works with or without a robot -- these tools
+    # only touch the learner store and the camera.
     system_prompt = SYSTEM_PROMPT
-    if args.learner:
-        learner, notes, store = load_learner(args.learners_root, args.learner)
-        system_prompt += build_briefing(learner, notes)
-        tools = tools + build_tutor_tools(store, learner)
-        logger.info("tutor mode: student %s (%s %s, %d prior sessions, "
-                    "tier %s)", learner.name, learner.level,
-                    learner.target_language, learner.sessions, learner.tier)
+    if args.learner or args.face_source:
+        holder = CurrentLearner()
+        candidate = None
+        if args.learner:
+            learner, notes, store = load_learner(args.learners_root,
+                                                 args.learner)
+            holder.learner = learner
+            system_prompt += build_briefing(learner, notes)
+        else:
+            store = LearnerStore(args.learners_root)
+        if args.face_source and holder.learner is None:
+            from face_id import identify_from_source
+            ident = await asyncio.to_thread(
+                identify_from_source, args.face_source, store)
+            logger.info("face: %s%s", ident.status,
+                        (" %s (score %s)" % (ident.learner.id, ident.score))
+                        if ident.learner else "")
+            if ident.status == "known":
+                holder.learner = ident.learner
+                notes = store.read_notes(ident.learner.id,
+                                         max_sessions=BRIEFING_SESSIONS)
+                system_prompt += build_briefing(ident.learner, notes)
+            elif ident.status == "unsure":
+                candidate = ident.learner
+                system_prompt += UNSURE_BRIEFING.format(name=candidate.name)
+            else:  # unknown face, or no face at all: same stranger flow
+                system_prompt += STRANGER_BRIEFING.format(
+                    languages=SPOKEN_LANGUAGES)
+        tools = tools + build_tutor_tools(store, holder)
+        if args.face_source:
+            tools = tools + build_enrollment_tools(
+                store, holder, args.face_source, candidate)
+        if holder.learner:
+            logger.info("tutor mode: student %s (%s %s, %d prior sessions, "
+                        "tier %s)", holder.learner.name, holder.learner.level,
+                        holder.learner.target_language,
+                        holder.learner.sessions, holder.learner.tier)
 
     # pipecat 1.6's LLMContext accepts a tools list or NOT_GIVEN but not None,
     # so the no-robot path must omit the argument entirely.
@@ -779,6 +819,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--learners-root", default=DEFAULT_LEARNERS_ROOT,
                    metavar="DIR",
                    help="learner store root")
+    g.add_argument("--face-source", default=None, metavar="SRC",
+                   help="identify who is present at startup and enable "
+                        "conversational enrollment: a V4L2 index (the "
+                        "Reachy camera), a video file, or an image "
+                        "directory")
 
     g = p.add_argument_group("embodiment")
     g.add_argument("--no-sway", action="store_true",
@@ -793,6 +838,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="seconds to wait before the first --say")
     g.add_argument("--say-gap", type=float, default=14.0,
                    help="seconds between repeated --say utterances")
+    g.add_argument("--deaf", action="store_true",
+                   help="never open the microphone; with --say this makes a "
+                        "run fully scripted (no room noise becoming phantom "
+                        "user turns)")
 
     p.add_argument("--quiet", action="store_true",
                    help="silence pipecat's own logging")
