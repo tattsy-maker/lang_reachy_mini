@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import math
 import os
@@ -601,9 +602,11 @@ async def run(args) -> None:
     # to the motion tools. Works with or without a robot -- these tools
     # only touch the learner store and the camera.
     system_prompt = SYSTEM_PROMPT
+    holder = store = None
+    if args.session and not args.face_source:
+        raise SystemExit("--session needs --face-source (who would it watch?)")
     if args.learner or args.face_source:
         holder = CurrentLearner()
-        candidate = None
         if args.learner:
             learner, notes, store = load_learner(args.learners_root,
                                                  args.learner)
@@ -611,7 +614,12 @@ async def run(args) -> None:
             system_prompt += build_briefing(learner, notes)
         else:
             store = LearnerStore(args.learners_root)
-        if args.face_source and holder.learner is None:
+        if args.session:
+            # The session runner (started after the pipeline exists) owns
+            # identity: the agent boots into the idle prompt and waits.
+            from session import IDLE_NOTE
+            system_prompt = SYSTEM_PROMPT + IDLE_NOTE
+        elif args.face_source and holder.learner is None:
             from face_id import identify_from_source
             ident = await asyncio.to_thread(
                 identify_from_source, args.face_source, store)
@@ -624,15 +632,16 @@ async def run(args) -> None:
                                          max_sessions=BRIEFING_SESSIONS)
                 system_prompt += build_briefing(ident.learner, notes)
             elif ident.status == "unsure":
-                candidate = ident.learner
-                system_prompt += UNSURE_BRIEFING.format(name=candidate.name)
+                holder.candidate = ident.learner
+                system_prompt += UNSURE_BRIEFING.format(
+                    name=holder.candidate.name)
             else:  # unknown face, or no face at all: same stranger flow
                 system_prompt += STRANGER_BRIEFING.format(
                     languages=SPOKEN_LANGUAGES)
         tools = tools + build_tutor_tools(store, holder)
         if args.face_source:
             tools = tools + build_enrollment_tools(
-                store, holder, args.face_source, candidate)
+                store, holder, args.face_source)
         if holder.learner:
             logger.info("tutor mode: student %s (%s %s, %d prior sessions, "
                         "tier %s)", holder.learner.name, holder.learner.level,
@@ -717,6 +726,20 @@ async def run(args) -> None:
     if not args.no_warmup:
         await warm_up(stt, tts, args.sample_rate)
 
+    # Session lifecycle (T10): a background task watches the face source
+    # and starts/ends tutoring sessions on the live pipeline.
+    session_task = None
+    if args.session:
+        from session import SessionRunner
+        session_runner = SessionRunner(
+            source=args.face_source, store=store, holder=holder,
+            context=context, task=task, base_prompt=SYSTEM_PROMPT,
+            languages=SPOKEN_LANGUAGES, robot=robot,
+            stable_secs=args.stable_secs, absent_secs=args.absent_secs)
+        session_task = asyncio.create_task(session_runner.run())
+        logger.info("session mode: watching for a face (stable %.1fs, "
+                    "walk-away %.0fs)", args.stable_secs, args.absent_secs)
+
     # --say injects an utterance as if it had been transcribed, which exercises
     # the whole loop (model -> tools -> motion -> speech) without a microphone.
     # Useful for demos, and for checking the robot end of things on a machine
@@ -737,6 +760,10 @@ async def run(args) -> None:
     try:
         await runner.run(task)
     finally:
+        if session_task is not None:
+            session_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await session_task
         if robot is not None:
             logger.info("returning the robot to neutral and taking media back")
             try:
@@ -824,6 +851,15 @@ def build_parser() -> argparse.ArgumentParser:
                         "conversational enrollment: a V4L2 index (the "
                         "Reachy camera), a video file, or an image "
                         "directory")
+    g.add_argument("--session", action="store_true",
+                   help="booth loop: watch the face source, start a session "
+                        "when a face is stable, save notes and reset when "
+                        "it walks away (needs --face-source)")
+    g.add_argument("--stable-secs", type=float, default=2.0,
+                   help="how long a face must be present before greeting")
+    g.add_argument("--absent-secs", type=float, default=60.0,
+                   help="how long a face must be gone before the session "
+                        "ends and notes are saved")
 
     g = p.add_argument_group("embodiment")
     g.add_argument("--no-sway", action="store_true",

@@ -47,7 +47,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T7 | Mixed-language STT hardening | T0 | todo | — |
 | T8 | Cloud speech mode (Gemini Live) | T4 | todo | — |
 | T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
-| T10 | Session lifecycle | T2, T4, T9 | todo | — |
+| T10 | Session lifecycle | T2, T4, T9 | done | 2026-08-31 |
 | T11 | Faire hardening & dress rehearsal | all | todo | — |
 
 Parallelizable from the start (after T0): T1, T3, T5, T7 have no
@@ -434,7 +434,12 @@ touching the keyboard; each gets their own greeting and their own notes.
 two-visitor run logged.
 
 **Progress log.**
-- —
+- 2026-08-31 — done on the simulated path: machine fully unit-tested
+  (fake clock), runner choreography tested with fakes (including
+  two-visitor no-leak), and one live simulated visitor end-to-end
+  (recognize → greet → converse → walk-away save → well-formed notes →
+  reset, 29 s). The live on-hardware two-visitor run is **blocked on the
+  `video` group** (see T1). [progress/T10.md](progress/T10.md).
 
 ---
 

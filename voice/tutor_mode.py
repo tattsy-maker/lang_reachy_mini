@@ -193,10 +193,21 @@ def load_learner(root: str, name_or_id: str) -> tuple[Learner, str, LearnerStore
 class CurrentLearner:
     """The mutable identity slot every tutor tool reads. ``--learner``
     fills it at startup; face recognition fills it when sure; and
-    confirm_identity / enroll_new_learner fill it mid-conversation."""
+    confirm_identity / enroll_new_learner fill it mid-conversation.
+
+    ``candidate`` holds an unsure face match awaiting verbal confirmation.
+    ``saved_ids`` tracks whose notes are saved this session, shared with
+    the session runner (T10) so a walk-away save can be observed."""
 
     def __init__(self, learner: Learner | None = None):
         self.learner = learner
+        self.candidate: Learner | None = None
+        self.saved_ids: set[str] = set()
+
+    def reset(self) -> None:
+        self.learner = None
+        self.candidate = None
+        self.saved_ids.clear()
 
 
 def normalize_language(value: str) -> str | None:
@@ -214,7 +225,7 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner) -> list:
     """The memory tools, same FunctionSchema style as the motion tools."""
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
-    saved_ids: set[str] = set()
+    saved_ids = holder.saved_ids
 
     async def save_session_notes(params):
         learner = holder.learner
@@ -323,11 +334,11 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner) -> list:
 
 
 def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
-                           face_source, candidate: Learner | None = None
-                           ) -> list:
-    """enroll_new_learner (always) and confirm_identity (only when face
-    recognition produced an unsure ``candidate``). Registered alongside the
-    memory tools whenever the agent has a face source."""
+                           face_source) -> list:
+    """enroll_new_learner and confirm_identity, registered alongside the
+    memory tools whenever the agent has a face source. confirm_identity
+    resolves ``holder.candidate`` — the unsure face match set at startup
+    (T9) or by the session runner (T10)."""
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
     async def enroll_new_learner(params):
@@ -373,6 +384,7 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
                      "begin a short first lesson"})
 
     async def confirm_identity(params):
+        candidate = holder.candidate
         if candidate is None:
             await params.result_callback(
                 {"error": "there is no identity candidate to confirm"})
@@ -416,12 +428,12 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
             handler=enroll_new_learner,
         ),
     ]
-    if candidate is not None:
-        tools.append(FunctionSchema(
-            name="confirm_identity",
-            description=f"The person confirmed they are {candidate.name}. "
-                        "Call this to load their profile and notes, then "
-                        "continue as their tutor.",
-            properties={}, required=[], handler=confirm_identity,
-        ))
+    tools.append(FunctionSchema(
+        name="confirm_identity",
+        description="The person verbally confirmed they are the student "
+                    "you tentatively recognized. Call this to load their "
+                    "profile and notes, then continue as their tutor. Only "
+                    "after an explicit yes to your 'is that you?' question.",
+        properties={}, required=[], handler=confirm_identity,
+    ))
     return tools
