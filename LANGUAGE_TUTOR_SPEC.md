@@ -208,6 +208,10 @@ motion tools (nod, look, etc.). We add:
 | `save_session_notes` | Write the end-of-session summary into the learner's `notes.md`. Called when the learner says goodbye, and also automatically if they simply walk away (face gone for ~60 seconds). |
 | `update_learner_level` | Promote/demote the stored level when the evidence is clear. |
 | `enroll_new_learner` | Create the folder and capture the face during the "what's your name?" exchange. |
+| `confirm_identity` | When the face match is uncertain and the person says "yes, it's me". |
+| `set_target_language` | Switch the language a learner practices when they ask to, and remember it. |
+| `forget_me` | Delete the learner's folder on the spot (section 8). |
+| `set_volume` | The robot's own speaker level, by request ("speak up", "quieter"). |
 
 **Level adaptation** is prompt-driven, not code-driven: beginner sessions get
 slower, simpler target-language sentences and more English; advanced sessions
@@ -381,6 +385,17 @@ both against real noise and real venue internet. Working assumption: local
 is the baseline (it cannot be taken down by Wi-Fi), cloud is switched on for
 the mixed-language showpiece when the connection proves solid.
 
+**Rehearsal update (2026-09-02).** The first in-person session ran both
+modes. The family judged the local voice poor and the Gemini voice good,
+and cloud replies came in well under a second (measured 0.6–1.7 s to
+first audio versus 2.7–5 s locally), so **cloud is now the intended
+booth default** and local is the fallback if venue internet fails. The
+one thing cloud mode does not yet do is the hands-free visitor loop
+(section 9): today it is one visitor per launch, because the
+speech-to-speech service keeps the conversation on Google's side and
+cannot simply be handed a new learner mid-run. Closing that gap is
+build-plan item 12 below.
+
 ## 8. Privacy — especially for the Faire
 
 Face data is sensitive, and Maker Faire visitors are the public, so:
@@ -430,6 +445,9 @@ Practical realities, from what we have already measured:
 - **Demo insurance.** The agent's `--say` flag injects a typed line as if
   spoken — if the hall gets too loud for any mic, we can still demonstrate
   the full recognize → remember → converse loop.
+- **The robot takes requests about itself.** Visitors ask it to speak up,
+  turn around, or switch languages mid-lesson; all three are tools it can
+  call, so the booth crew never touches a mixer or a keyboard for them.
 - **The comeback moment is the show.** The family's own profiles (adults and
   teens, with real session history) are pre-enrolled, so any visitor can
   immediately *watch* the robot recognize someone and resume a lesson, even
@@ -457,6 +475,7 @@ Ordered so that every milestone is demoable on its own:
 | 8. Conversational enrollment | "What's your name?" flow creates a guest profile and captures the face, all by voice, in both speech modes. | 2 + 3 |
 | 9. Session lifecycle | Face-triggered start, walk-away save, reset between visitors, end-of-day guest wipe script. | all above |
 | 10. Faire hardening | Handheld/headset mic path (`--audio-device`), booth signage, family profiles pre-enrolled with real history, local-vs-cloud bake-off on venue internet, full dress rehearsal. | all above |
+| 11. Cloud visitor loop | The hands-free watch → greet → tutor → save → reset loop working over Gemini Live, since cloud is the chosen booth voice. | 7 + 9 |
 
 Milestone 5 is the one that can be cut without touching anything else: if
 Piper disappoints or time runs out, the booth ships with four languages and

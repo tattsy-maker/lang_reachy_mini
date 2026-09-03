@@ -34,6 +34,19 @@ logger = logging.getLogger("tutor_mode")
 _LANGUAGE_NAMES = {"en": "English", "es": "Spanish", "fr": "French",
                    "it": "Italian", "pt": "Portuguese", "hi": "Hindi",
                    "ru": "Russian", "zh": "Mandarin Chinese"}
+# Beyond the six tutoring languages: names a visitor may ask for. Local
+# mode has no voice for these (the speech layer folds them into the main
+# voice), but cloud mode (Gemini) speaks them natively -- rehearsal found a
+# visitor asking for Swedish and the tool refusing it.
+_LANGUAGE_NAMES.update({
+    "de": "German", "sv": "Swedish", "nl": "Dutch", "da": "Danish",
+    "no": "Norwegian", "fi": "Finnish", "pl": "Polish", "cs": "Czech",
+    "uk": "Ukrainian", "el": "Greek", "tr": "Turkish", "ar": "Arabic",
+    "he": "Hebrew", "ja": "Japanese", "ko": "Korean", "vi": "Vietnamese",
+    "th": "Thai", "id": "Indonesian", "ro": "Romanian", "hu": "Hungarian",
+    "ca": "Catalan", "ta": "Tamil", "bn": "Bengali", "ur": "Urdu",
+    "fa": "Persian", "sw": "Swahili",
+})
 
 DEFAULT_LEARNERS_ROOT = os.path.join(_REPO, "learners")
 
@@ -67,8 +80,11 @@ Tutoring rules. Where they conflict with the general language rule above, \
 these win:
 
 - Teach in {language}. The target language comes from {name}'s profile, not \
-from what you hear. If {name} asks something in English, answer it, then \
-steer back into {language}. Never switch the lesson to another language.
+from what you hear: if {name} asks something in English, answer it, then \
+steer back into {language}. A stray word in another language does not change \
+the lesson. But if {name} clearly asks to practice a different language, that \
+is allowed and welcome: switch at once and call set_target_language so it is \
+remembered.
 - {level_guidance}
 - Correct every mistake, briefly and kindly. Give the right form, let the \
 lesson move on. Never let an error slide, and never lecture about grammar \
@@ -282,6 +298,31 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner) -> list:
                     learner.id, old, level)
         await params.result_callback({"level": level, "was": old})
 
+    async def set_target_language(params):
+        learner = holder.learner
+        if learner is None:
+            await params.result_callback({"error": "no learner identified"})
+            return
+        language = normalize_language(str(params.arguments.get("language", "")))
+        if language is None:
+            await params.result_callback(
+                {"error": "unrecognized language; supported: "
+                          + ", ".join(sorted(_LANGUAGE_NAMES.values()))})
+            return
+        current = store.load(learner.id)
+        if current is None:
+            await params.result_callback({"error": "learner vanished"})
+            return
+        old_code = current.target_language
+        current.target_language = language
+        store.save(current)
+        learner.target_language = language
+        logger.info("tutor: language for %s changed %s -> %s",
+                    learner.id, old_code, language)
+        await params.result_callback(
+            {"target_language": language_name(language), "was": old_code,
+             "note": "continue the lesson in the new language"})
+
     async def forget_me(params):
         learner = holder.learner
         if learner is None:
@@ -324,6 +365,16 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner) -> list:
             },
             required=["practiced", "struggled_with", "wins", "next_time"],
             handler=save_session_notes,
+        ),
+        FunctionSchema(
+            name="set_target_language",
+            description="Switch which language the student practices, when "
+                        "they clearly ask to. Any language you can speak "
+                        "can be taught, including Russian and Mandarin.",
+            properties={"language": {"type": "string",
+                                     "description": "e.g. 'Russian' or 'ru'"}},
+            required=["language"],
+            handler=set_target_language,
         ),
         FunctionSchema(
             name="update_learner_level",

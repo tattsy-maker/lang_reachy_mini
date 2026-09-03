@@ -253,7 +253,7 @@ class MultilingualWhisperMLX(WhisperSTTServiceMLX):
                     except ValueError:
                         language = None
 
-            log.debug("transcribed (%s): %s", detected or "unknown", text.strip())
+            log.info("heard (%s): %s", detected or "unknown", text.strip())
             await self._handle_transcription(text, True, language)
             yield TranscriptionFrame(
                 text, self._user_id, time_now_iso8601(), language)

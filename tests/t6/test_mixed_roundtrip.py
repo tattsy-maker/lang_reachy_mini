@@ -42,8 +42,10 @@ def test_en_es_and_en_fr_roundtrip_both_halves(paths):
     heard = rows[0]["heard"].lower()
     assert "library" in heard and "biblioteca" in heard, rows[0]
     heard = rows[1]["heard"].lower()
-    assert "gare" in heard and ("station" in heard or "short" in heard
-                                or "french" in heard), rows[1]
+    # "la gare" comes back as its near-homophone "la guerre" now and then;
+    # either proves the French span was voiced as French.
+    assert ("gare" in heard or "guerre" in heard) and (
+        "station" in heard or "short" in heard or "french" in heard), rows[1]
     heard = rows[2]["heard"].lower()
     assert "good morning" in heard, rows[2]
 

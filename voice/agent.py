@@ -48,7 +48,7 @@ from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (         # noqa: 
 )
 from pipecat.audio.vad.silero import SileroVADAnalyzer                  # noqa: E402
 from pipecat.audio.vad.vad_analyzer import VADParams                    # noqa: E402
-from pipecat.frames.frames import LLMMessagesAppendFrame                # noqa: E402
+from pipecat.frames.frames import LLMMessagesAppendFrame, LLMRunFrame   # noqa: E402
 from pipecat.pipeline.pipeline import Pipeline                          # noqa: E402
 from pipecat.pipeline.runner import PipelineRunner                      # noqa: E402
 from pipecat.pipeline.task import PipelineParams, PipelineTask          # noqa: E402
@@ -188,7 +188,8 @@ You have a body, so use it. Call your movement tools naturally as part of \
 talking: nod when you agree, shake your head when you disagree or cannot do \
 something, look toward whatever you are talking about, and wiggle your antennas \
 when you are pleased. Do not narrate your own movements -- just move, and let \
-the person watching see it. Do not announce that you are about to use a tool.
+the person watching see it. Do not announce that you are about to use a tool. If someone asks you to \
+speak louder or quieter, call set_volume.
 
 Two rules about moving, because they decide how quickly you can answer:
 
@@ -199,8 +200,16 @@ once. Holding your reply until after a movement finishes just makes you slow.
 several. Chaining movements one after another adds a noticeable pause before \
 you say anything.
 
+{vision}"""
+
+VISION_NONE = """\
 You cannot see -- you have no camera feed in this conversation. If you are asked \
 what you can see, say so plainly rather than inventing something."""
+
+VISION_FACE = """\
+You have a camera, but only for recognizing faces: you know when someone is in \
+front of you, and who they are if you have met them. You see nothing else, so \
+do not describe surroundings or invent details."""
 
 # {languages} is filled in at startup with the languages that can really
 # be spoken on this machine: Kokoro's verified set plus whatever Piper
@@ -212,11 +221,12 @@ what you can see, say so plainly rather than inventing something."""
 # speech-to-speech model (cloud mode) -- it has one voice for every
 # language and would read the brackets aloud.
 SPAN_TAG_RULE = """
-- When one reply mixes languages, wrap each phrase that is not in the \
-reply's main language in span tags with its two letter code: 'library' is \
-[es]la biblioteca[/es], or thank you is [ru]спасибо[/ru]. The tags pick \
-the voice for that phrase and are never read aloud. Never tag the main \
-language, and never mention the tags.
+- Your voice is {main} unless you say otherwise with span tags. Wrap EVERY \
+phrase or sentence in another language in tags with its two letter code, \
+including whole sentences: 'library' is [es]la biblioteca[/es]; \
+[es]¿Qué quieres practicar hoy?[/es]; thank you is [ru]спасибо[/ru]. The tags \
+pick the voice for that text and are never read aloud. Never tag {main}, \
+and never mention the tags.
 """
 
 
@@ -227,6 +237,61 @@ language, and never mention the tags.
 # markedly more reliable reasoning about "turn thirty degrees left" than about
 # 0.52, and the driver clamps whatever arrives anyway.
 # ---------------------------------------------------------------------------
+
+def reachy_audio_card() -> str | None:
+    """ALSA card index of the Reachy Mini speaker, from /proc/asound/cards."""
+    try:
+        for line in open("/proc/asound/cards"):
+            if "Reachy Mini Audio" in line and line.strip()[0].isdigit():
+                return line.strip().split()[0]
+    except OSError:
+        pass
+    return None
+
+
+def build_audio_tools() -> list:
+    """set_volume: the robot's own speaker level, by voice request.
+
+    Drives the ALSA mixer directly (amixer), the same control CLAUDE.md
+    says to raise by hand -- it defaults to a quiet ~65% on this unit.
+    Needs a machine with the Reachy speaker; elsewhere the tool reports
+    that it cannot.
+    """
+    import subprocess
+
+    async def set_volume(params):
+        card = reachy_audio_card()
+        if card is None:
+            await params.result_callback(
+                {"error": "no Reachy speaker on this machine"})
+            return
+        try:
+            percent = int(float(params.arguments.get("percent", 100)))
+        except (TypeError, ValueError):
+            await params.result_callback({"error": "percent must be a number"})
+            return
+        percent = max(10, min(100, percent))  # never fully mute yourself
+
+        def apply():
+            for control in ("PCM,0", "PCM,1"):
+                subprocess.run(["amixer", "-c", card, "sset", control,
+                                f"{percent}%"], capture_output=True)
+        await asyncio.to_thread(apply)
+        logger.info("volume set to %d%%", percent)
+        await params.result_callback({"volume_percent": percent})
+
+    return [FunctionSchema(
+        name="set_volume",
+        description="Set your own speaker volume, as a percentage from 10 "
+                    "to 100. Use when asked to speak louder or quieter; "
+                    "louder means about 20 points up, quieter about 20 "
+                    "down. It starts at 100.",
+        properties={"percent": {"type": "integer",
+                                "description": "10 to 100"}},
+        required=["percent"],
+        handler=set_volume,
+    )]
+
 
 def build_tools(robot: RobotLink) -> list:
     async def move_head(params):
@@ -604,8 +669,11 @@ async def run(args) -> None:
         spoken_names = ", ".join(v.name for v in speakable.values())
         # The span-tag rule is local-only: per-language voices need it,
         # a speech-to-speech model would read the brackets aloud.
-        base_prompt = SYSTEM_PROMPT.format(languages=spoken_names) \
-            + SPAN_TAG_RULE
+        tutor_mode = bool(args.learner or args.face_source or args.session)
+        base_prompt = SYSTEM_PROMPT.format(
+            languages=spoken_names,
+            vision=VISION_FACE if args.face_source else VISION_NONE,
+        ) + SPAN_TAG_RULE.format(main=speakable[start_lang].name)
 
         if auto_language:
             stt = MultilingualWhisperMLX(
@@ -620,19 +688,33 @@ async def run(args) -> None:
             voices_dir=args.piper_voices,
             settings=DualEngineTTS.Settings(
                 voice=start_voice, language=speakable[start_lang].language))
+        # In tutor mode the voice must NOT follow Whisper's guess about what
+        # it heard (spec 6: the target language comes from the profile, not
+        # detection). Rehearsal showed why: room noise detected as Russian
+        # switched the voice, and English replies came out through Piper's
+        # Russian phonemes. The model picks the voice itself via span tags.
         language_router = LanguageRouter(
-            initial=start_lang, voice=args.voice, enabled=auto_language,
+            initial=start_lang, voice=args.voice,
+            enabled=auto_language and not tutor_mode,
             extra=piper_langs)
+        if tutor_mode and auto_language:
+            logger.info("tutor mode: voice follows the model's span tags, "
+                        "not detection (untagged = %s)",
+                        speakable[start_lang].name)
     else:
         # Cloud mode (T8): one speech-to-speech model, one voice, native
         # mixed-language handling -- no tags, no router, no local engines.
-        spoken_names = ("many languages, including English, Spanish, "
-                        "French, Italian, Portuguese, Russian, Mandarin "
-                        "and Hindi")
+        spoken_names = ("English, Spanish, French, Italian, Portuguese, "
+                        "Russian, Mandarin, Hindi, and most other languages")
         # Measured (progress/T8.md): Gemini Live sometimes speaks the
         # goodbye but skips the save_session_notes call the briefing
         # demands. Claude does not need this reminder; Gemini does.
-        base_prompt = SYSTEM_PROMPT.format(languages=spoken_names) + """
+        base_prompt = SYSTEM_PROMPT.format(
+            languages=spoken_names,
+            vision=VISION_FACE if args.face_source else VISION_NONE) + """
+You can teach every language you can speak, Russian and Mandarin included. \
+If a student asks to practice a different language, switch at once and call \
+set_target_language.
 Tool discipline: your tools are real actions, not things to mention. \
 Whenever your instructions say to call a tool at a moment (for example \
 save_session_notes when the student says goodbye), you must actually \
@@ -673,7 +755,7 @@ emit the tool call in that same turn, alongside anything you say."""
     # Each FunctionSchema carries its own handler, so pipecat dispatches
     # straight from the schema. Calling register_function() as well is
     # redundant and pipecat warns about it.
-    tools = build_tools(robot) if robot else []
+    tools = (build_tools(robot) if robot else []) + build_audio_tools()
 
     # Tutor mode: append the right briefing to the system prompt and
     # register the memory (and, with a face source, enrollment) tools next
@@ -895,6 +977,17 @@ emit the tool call in that same turn, alongside anything you say."""
                         messages=[{"role": "user", "content": utterance}],
                         run_llm=True)])
         asyncio.create_task(kickoff())
+
+    if args.speech == "cloud" and not args.say:
+        # Gemini Live only starts forwarding microphone audio once it has
+        # been handed an initial context (pipecat gates realtime input on
+        # it). Every --say test supplied one; a live-mic session never did,
+        # and the robot sat there unresponsive. Kick the conversation off
+        # the way pipecat's own examples do -- the model greets first.
+        async def cloud_kickoff():
+            await asyncio.sleep(1.0)
+            await task.queue_frames([LLMRunFrame()])
+        asyncio.create_task(cloud_kickoff())
 
     logger.info("ready -- say something. Ctrl-C to stop.")
     runner = PipelineRunner(handle_sigint=True)

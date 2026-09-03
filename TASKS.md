@@ -24,8 +24,9 @@ spec says *why*.
   two venvs (`./.venv` robot, `voice/.venv` agent); zenoh needs a pinned
   address in this container (`--zenoh-listen tcp/0.0.0.0:7447` /
   `zenoh://127.0.0.1:7447`); run audio under `sg audio`, serial under
-  `sg dialout`; `voice/.env` holds `ANTHROPIC_API_KEY` (and later
-  `GOOGLE_API_KEY`).
+  `sg dialout`; `voice/.env` holds `ANTHROPIC_API_KEY` and `GEMINI_API_KEY`
+  (cloud mode; `GOOGLE_API_KEY` also accepted). Camera commands need
+  `sg video -c` only in shells older than the 2026-09-02 usermod.
 
 Each task keeps dated progress notes and learnings in `progress/<task-id>.md`,
 linked from its Progress log below.
@@ -48,11 +49,14 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T8 | Cloud speech mode (Gemini Live) | T4 | done | 2026-08-31 |
 | T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
 | T10 | Session lifecycle | T2, T4, T9 | done | 2026-08-31 |
-| T11 | Faire hardening & dress rehearsal | all | in progress | 2026-08-31 |
+| T11 | Faire hardening & dress rehearsal | all | in progress | 2026-09-02 |
+| T12 | Cloud session lifecycle (watch / walk-away / reset over Gemini) | T8, T10 | todo | — |
 
 Parallelizable from the start (after T0): T1, T3, T5, T7 have no
 dependencies on each other. The critical path is
-T0 → T1 → T2 → T9 → T10 → T11.
+T0 → T1 → T2 → T9 → T10 → T11. T12 was added after the first
+in-person rehearsal (2026-09-02): the family chose the cloud voice, and
+the booth loop must work over it.
 
 ---
 
@@ -399,6 +403,11 @@ cloud-mode tutoring tone spot-checked against the briefing (spec risk:
   findings fixed on the way — multi-turn text injection and Gemini's
   tool-call discipline — details in [progress/T8.md](progress/T8.md).
   Live-mic cloud conversation deferred to the T11 rehearsal.
+- 2026-09-02 — live-mic cloud conversation done in person and it found a
+  real bug: Gemini drops microphone audio until it has an initial
+  context (every `--say` test supplied one). The agent now opens the
+  conversation itself in cloud mode. Verdict: the family prefers this
+  voice for the booth. See [progress/T11.md](progress/T11.md).
 
 ---
 
@@ -508,3 +517,58 @@ either passing or written up as a known issue with a booth workaround.
   and tests (static anywhere; live smoke robot-marked, camera-gated).
   Remaining items all need the user or the venue — the list with exact
   unblock commands is in [progress/T11.md](progress/T11.md).
+- 2026-09-02 — **first in-person rehearsal**, cloud mode: two visitors
+  enrolled by voice from the live camera, lessons, language switch,
+  volume by voice, notes on goodbye. Six bugs fixed on the spot (voice
+  following Whisper's guess, "I can't see you", cloud mic gating,
+  Russian refusal, transcripts hidden, volume). Not yet done: the
+  comeback (camera missed the face at startup), "forget me", family
+  pre-enrollment, booth mic, bake-off. Cloud is one visitor per launch
+  until T12. [progress/T11.md](progress/T11.md).
+
+---
+
+## T12 — Cloud session lifecycle
+
+**Goal.** The booth loop (T10: watch → greet → tutor → save on walk-away →
+reset → watch) working over Gemini Live, since the family chose the
+cloud voice at the 2026-09-02 rehearsal. Today cloud mode is one visitor
+per launch and looks for a face only once at startup.
+
+**Why it does not just work.** Gemini Live keeps conversation state
+server-side: pipecat's service ignores later local context swaps
+(`set_messages`), its system instruction is fixed at connect, and text
+injected through the user aggregator after the first turn vanishes (see
+progress/T8.md). The session runner relies on all three.
+
+**Build:**
+- Make `SessionRunner` cloud-aware: on session start, deliver the
+  visitor's briefing and the walk-up cue through the service's own
+  injection path (`_create_single_response`, the route `--say` already
+  uses after turn 1), not `set_messages`; on session end, cue the notes
+  save the same way, then reconnect the Gemini session (the service has
+  `_reconnect()`) so the next visitor starts with a clean server-side
+  history — no leakage between visitors.
+- Keep the camera watch running in cloud mode (today `--session` is
+  effectively local-only); presence detection is CPU, unaffected.
+- Notes must follow the *current* profile language after
+  `set_target_language` (rehearsal: "next time: French" after switching
+  to Russian) — a one-line briefing/tool-result fix, do it here.
+- `start_booth.sh`: a `BOOTH_SPEECH=cloud` knob, cloud as the default if
+  the bake-off confirms.
+
+**Integration tests** (`google`-marked): a simulated two-visitor sequence
+(fixture video + `--say`) over cloud mode ends with two separate,
+well-formed notes files and no cross-talk; walk-away save fires once;
+the second visitor's greeting does not mention the first. Existing local
+T10 tests untouched.
+
+**E2E check.** In person: two people take turns at the robot in cloud
+mode without touching the keyboard; the comeback greeting by name
+happens for both.
+
+**Definition of Done.** Two-visitor cloud run logged in person; tests
+green; `start_booth.sh` can launch cloud mode.
+
+**Progress log.**
+- —

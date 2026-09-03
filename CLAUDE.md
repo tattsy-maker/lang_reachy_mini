@@ -122,27 +122,78 @@ reading them. If the agent stops answering mid-conversation, the first thing to
 check is `grep "dropping unconvertible thought" voice/agent.log` (see the voice
 README for why).
 
-## Language-tutor additions (2026-08-31)
+## Language tutor (state as of 2026-09-02)
 
-The tutor work (see `LANGUAGE_TUTOR_SPEC.md`, tracker in `TASKS.md`,
-per-task notes in `progress/`) added to the voice agent:
+Product spec: `LANGUAGE_TUTOR_SPEC.md`. Tracker with per-task status and
+dated logs: `TASKS.md`. Details and learnings per task: `progress/T*.md`.
+T0–T10 are done; T11 (Faire hardening) is mid-rehearsal; T12 (cloud
+visitor loop) is the next engineering task. Read `progress/T11.md` first
+for what the rehearsal found.
 
-- `--learner NAME --learners-root DIR` — tutor mode for one learner;
-  `--face-source SRC` — identify by face / conversational enrollment;
-  `--session --stable-secs S --absent-secs S` — the full booth loop;
-  `--deaf` — never open the mic (**always use with `--say` scripted runs**,
-  room noise becomes phantom user turns otherwise);
-  `--language ru|zh` — spoken by Piper (models in `voice/piper_voices/`,
-  download command in `voice/piper_tts.py`'s docstring).
-- Tests: `tests/run.sh [t0..t11]` (own venv, markers skip cleanly when
-  hardware/keys/models are absent). Measurement reports live in
-  `tests/reports/`.
-- **The `video` group trap** (third of its kind after `dialout`/`audio`):
-  the Reachy camera at `/dev/video0` needs `sudo usermod -aG video altha`
-  once, else every open fails. `/dev/video1` is the camera's metadata
-  node — never read frames from it.
-- Real learner data lives in `learners/` (gitignored, private by design);
-  end-of-day guest wipe: `python tutor/wipe_guests.py`.
+### Start the booth
+
+```bash
+./start_booth.sh                       # local voice, hands-free visitor loop
+```
+
+The family chose the **Gemini Live voice** at rehearsal. Until T12 lands,
+cloud mode is one visitor per launch (looks for a face once at startup),
+started by hand:
+
+```bash
+.venv/bin/python controller.py serve --zenoh-listen tcp/0.0.0.0:7447 >> serve.log 2>&1 &
+voice/.venv/bin/python voice/agent.py --broker zenoh://127.0.0.1:7447 \
+    --speech cloud --face-source 0 --audio-device "Reachy Mini Audio" >> voice/run.log 2>&1 &
+```
+
+Needs `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in `voice/.env`. Stand in
+front of the camera during the first ~5 s after launch or it starts in
+stranger mode. The robot greets first. Stop with `pkill -INT -f
+voice/agent.py`, then serve.
+
+### Agent flags added by the tutor work
+
+`--learner NAME --learners-root DIR` (tutor one learner) ·
+`--face-source SRC` (camera index / video / image dir) ·
+`--session --stable-secs S --absent-secs S` (booth loop, local mode) ·
+`--speech local|cloud`, `--gemini-model`, `--gemini-voice` ·
+`--language ru|zh` (Piper; models in `voice/piper_voices/`, fetch command
+in `voice/piper_tts.py`) · `--deaf` (never open the mic — **always** with
+`--say` scripted runs). Tools the model can call besides motion:
+`save_session_notes`, `update_learner_level`, `set_target_language`,
+`forget_me`, `enroll_new_learner`, `confirm_identity`, `set_volume`.
+
+### Tests and data
+
+`tests/run.sh [t0..t12]` (own venv; markers skip with a printed reason
+when hardware/keys/models are absent). `tests/reports/` holds the
+measured gates. Real learner data is `learners/` (gitignored); the booth
+script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
+
+### Traps the tutor work hit (in addition to the list above)
+
+- **Groups:** `video` is needed for the camera (`sudo usermod -aG video
+  $USER`, done 2026-09-02). A shell that predates the usermod must wrap
+  camera commands in `sg video -c "..."`. `/dev/video1` is the camera's
+  metadata node; never read frames from it.
+- **Gemini Live drops mic audio until it has an initial context.** Every
+  `--say` test provided one; a live session did not, and the robot sat
+  silent. The agent now kicks the conversation off itself in cloud mode.
+  Related: after the first turn, text injected through the aggregator is
+  ignored by Gemini; later `--say` turns use the service's own injection
+  path. And Gemini needs an explicit "actually call the tool" line that
+  Claude never did.
+- **In tutor mode the voice must not follow Whisper's language guess.**
+  Room noise detected as Russian once switched the voice to Piper's
+  Russian and English came out as gibberish. The model now chooses voices
+  via `[es]...[/es]` span tags; untagged text is English.
+- **Append-only logs lie to `grep`.** `serve.log` and `voice/run.log`
+  contain every previous run's "ready" line; read from this run's offset
+  (the booth script does).
+- **A `&` job from a tool shell dies with the shell.** Launch long-lived
+  processes detached (the harness's background mode, or `nohup`/`setsid`).
+- **Speaker volume:** the mixer default is quiet; the booth script and
+  `set_volume` use `amixer -c <card> sset PCM,0 N%`.
 
 ## First-time setup on a fresh clone
 
