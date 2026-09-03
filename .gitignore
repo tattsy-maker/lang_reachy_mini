@@ -24,3 +24,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Visitor wishes recorded at the booth (their words, sometimes first names)
+/booth/wishes.md

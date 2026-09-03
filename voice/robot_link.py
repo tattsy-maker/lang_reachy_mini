@@ -199,3 +199,7 @@ class RobotLink:
 
     def home(self, duration: float = 1.0):
         self.fire("home", duration=duration)
+
+    def perform(self, name: str):
+        """Play a curated recorded move (dances, emotions, spin)."""
+        self.fire("play_move", move=name)

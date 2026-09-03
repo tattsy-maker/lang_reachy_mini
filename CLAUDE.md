@@ -127,14 +127,21 @@ README for why).
 Product spec: `LANGUAGE_TUTOR_SPEC.md`. Tracker with per-task status and
 dated logs: `TASKS.md`. Details and learnings per task: `progress/T*.md`.
 T0–T10 are done; T11 (Faire hardening) is mid-rehearsal; T12 (cloud
-visitor loop) is the next engineering task. Read `progress/T11.md` first
-for what the rehearsal found.
+visitor loop) is the next engineering task, then T13 (the family's
+debrief feedback: goals, presence, tracking, tricks, poster). Read
+`progress/T11.md` first for what the rehearsal found and
+`progress/T13.md` for what the family asked for.
 
 ### Start the booth
 
 ```bash
 ./start_booth.sh                       # local voice, hands-free visitor loop
 ```
+
+Knobs: `BOOTH_ABSENT_SECS` (walk-away timer, "still there?" at two
+thirds), `BOOTH_ATTRACT_SECS` (idle dance; 0 = off), `BOOTH_PERSONA`
+(`booth` default, `plain` for none). Speech and face tracking are on
+by default with a camera.
 
 The family chose the **Gemini Live voice** at rehearsal. Until T12 lands,
 cloud mode is one visitor per launch (looks for a face once at startup),
@@ -159,9 +166,17 @@ voice/agent.py`, then serve.
 `--speech local|cloud`, `--gemini-model`, `--gemini-voice` ·
 `--language ru|zh` (Piper; models in `voice/piper_voices/`, fetch command
 in `voice/piper_tts.py`) · `--deaf` (never open the mic — **always** with
-`--say` scripted runs). Tools the model can call besides motion:
-`save_session_notes`, `update_learner_level`, `set_target_language`,
-`forget_me`, `enroll_new_learner`, `confirm_identity`, `set_volume`.
+`--say` scripted runs) · `--persona booth|plain` (T13.5 quips + the
+wishlist question; the booth script passes booth) · `--no-track` (face
+tracking is on whenever there is a camera and a robot, T13.3) ·
+`--attract-secs S` (session mode: idle dance after S s with nobody in
+frame, T13.4) · `--wishes-file PATH` · `--no-voice-id` (voice prints are
+on in tutor mode, T13.9) · `--voice-source WAV` (testing: hear this file
+as the visitor at each `--say`). Tools the model can call besides
+motion: `save_session_notes`, `update_learner_level`, `set_learner_goal`,
+`set_target_language`, `forget_me`, `enroll_new_learner`,
+`confirm_identity`, `set_volume`, `perform` (dances/emotions/spin from
+`moves.py`), `record_wish`.
 
 ### Tests and data
 
@@ -194,6 +209,28 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   processes detached (the harness's background mode, or `nohup`/`setsid`).
 - **Speaker volume:** the mixer default is quiet; the booth script and
   `set_volume` use `amixer -c <card> sset PCM,0 N%`.
+- **One camera, one opener.** `/dev/video0` cannot be streamed by two
+  `VideoCapture`s. Anything that runs for the whole session (the session
+  watcher, the face tracker) reads from the shared `FrameHub`
+  (`face/camera.py`), and enrollment takes its snapshots from the hub
+  too. Do not open `Camera(0)` yourself while the agent is up.
+- **Who owns which joint.** The face tracker owns `head_yaw`/`body_yaw`;
+  embodiment owns pitch and antennas (the tracker only biases pitch).
+  A tool call that turns the head/body, `perform`, or `reset_pose`
+  suspends the tracker and it re-reads the measured pose on resume.
+  Keep that split if you add motion (docstrings in `voice/tracking.py`
+  and `voice/embodiment.py`).
+- **Voice prints run on the GPU, unlike faces.** SpeechBrain ECAPA in
+  `voice/.venv` (torch is the cu130 build): 5 ms per 3 s clip on CUDA,
+  40 ms on CPU, 5 s model load (paid in warmup). `voice/verify_voiceid.py`
+  is the gate; thresholds 0.60/0.45 were measured on synthetic Kokoro
+  voices — re-run it on the family's real recordings before trusting a
+  challenge on a human. Gemini Live emits no user-speaking frames, so
+  the collector gates on audio energy, not turn events.
+- **Recorded moves need their datasets on disk.** `moves.py --cached`
+  says whether the two Pollen HuggingFace libraries are present;
+  `--preload` fetches them. The booth preflight does this with a 60 s
+  cap; without them `perform` only has `spin` and `wiggle`.
 
 ## First-time setup on a fresh clone
 

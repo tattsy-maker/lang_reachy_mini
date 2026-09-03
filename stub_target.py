@@ -84,6 +84,34 @@ class StubTarget(ReachyMiniTarget):
     def goto_sleep(self) -> None:
         self.set_posture(head_pitch=0.4, head_z=-0.015)
 
+    # -- recorded moves (T13.4): a timed no-op ------------------------------
+    #
+    # The stub has no daemon to stream a trajectory to, and tests must not
+    # need the HuggingFace cache. It validates the name against the same
+    # library, "plays" for a token 0.2 s so cancellation paths are real,
+    # and records what it was asked to play.
+
+    def play_move(self, name: str) -> Dict[str, float]:
+        import time
+        from moves import LIBRARY
+        spec = LIBRARY.get(name)
+        if spec is None or spec.dataset is None:
+            raise ValueError("no recorded move %r; recorded ones are %s"
+                             % (name, ", ".join(
+                                 m.name for m in LIBRARY.values()
+                                 if m.dataset)))
+        self._require()
+        self._move_cancelled = False
+        self.moves_played = getattr(self, "moves_played", []) + [name]
+        for _ in range(4):
+            if self._move_cancelled:
+                break
+            time.sleep(0.05)
+        return self.set_posture(head_yaw=0.0)
+
+    def cancel_move(self) -> None:
+        self._move_cancelled = True
+
     # -- media ownership ----------------------------------------------------
     #
     # The base class delegates these to the vendor SDK object in self._mini,

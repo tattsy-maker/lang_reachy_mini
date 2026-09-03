@@ -31,6 +31,13 @@ Usage::
 collision); ``name`` is what was spoken at enrollment and what greetings
 use. Levels: beginner / intermediate / advanced. Tiers: family (permanent)
 / guest (wiped at close of day).
+
+Goals (T13.1, from the family debrief: "one wants conversation, another an
+exam, a third a job interview"): ``goal`` is one of GOALS and ``goal_note``
+is the learner's own words. Both are optional on disk -- a profile written
+before T13 loads with ``goal="conversation"`` and an empty note. So is
+``voice_embedding`` (T13.9): the speaker print, kept next to the face
+signature and deleted with it.
 """
 
 from __future__ import annotations
@@ -48,8 +55,15 @@ logger = logging.getLogger("tutor.store")
 
 LEVELS = ("beginner", "intermediate", "advanced")
 TIERS = ("family", "guest")
+GOALS = ("conversation", "exam", "work", "travel", "other")
 PROFILE_KEYS = ("name", "target_language", "level", "embedding",
-                "sessions", "last_seen", "tier")
+                "sessions", "last_seen", "tier", "goal", "goal_note",
+                "voice_embedding")
+# Keys a pre-T13 profile.json may lack, with the value they load as.
+# ``voice_embedding`` (T13.9) is the ECAPA speaker print, 192 floats, or
+# None until the tutor has heard enough of the learner to keep one.
+OPTIONAL_KEYS = {"goal": "conversation", "goal_note": "",
+                 "voice_embedding": None}
 
 _NOTES_HEADER = "# {name} — session notes\n"
 _ENTRY_RX = re.compile(r"^## \d{4}-\d{2}-\d{2}", re.M)
@@ -77,6 +91,9 @@ class Learner:
     sessions: int = 0
     last_seen: str = field(default_factory=_today)
     tier: str = "guest"
+    goal: str = "conversation"
+    goal_note: str = ""
+    voice_embedding: list[float] | None = None
 
     def profile_dict(self) -> dict:
         return {key: getattr(self, key) for key in PROFILE_KEYS}
@@ -101,12 +118,16 @@ class LearnerStore:
 
     def create(self, name: str, target_language: str, *,
                level: str = "beginner", tier: str = "guest",
-               embedding: list[float] | None = None) -> Learner:
+               embedding: list[float] | None = None,
+               goal: str = "conversation", goal_note: str = "",
+               voice_embedding: list[float] | None = None) -> Learner:
         """New learner folder; the id disambiguates on name collision."""
         if level not in LEVELS:
             raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
         if tier not in TIERS:
             raise ValueError(f"tier must be one of {TIERS}, got {tier!r}")
+        if goal not in GOALS:
+            raise ValueError(f"goal must be one of {GOALS}, got {goal!r}")
         base = _slugify(name)
         learner_id, n = base, 1
         while self._folder(learner_id).exists():
@@ -115,7 +136,10 @@ class LearnerStore:
         learner = Learner(id=learner_id, name=name,
                           target_language=target_language, level=level,
                           embedding=list(embedding) if embedding else None,
-                          tier=tier)
+                          tier=tier, goal=goal,
+                          goal_note=str(goal_note or "").strip(),
+                          voice_embedding=(list(voice_embedding)
+                                           if voice_embedding else None))
         self._folder(learner_id).mkdir(parents=True)
         self.save(learner)
         self._notes_path(learner_id).write_text(
@@ -135,8 +159,13 @@ class LearnerStore:
             return None
         try:
             data = json.loads(path.read_text())
-            return Learner(id=learner_id,
-                           **{key: data[key] for key in PROFILE_KEYS})
+            fields = {key: data[key] for key in PROFILE_KEYS
+                      if key not in OPTIONAL_KEYS}
+            for key, default in OPTIONAL_KEYS.items():
+                fields[key] = data.get(key, default)
+            if fields["goal"] not in GOALS:
+                fields["goal"] = "other"
+            return Learner(id=learner_id, **fields)
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             logger.warning("skipping corrupt profile %s (%s) — "
                            "left on disk for inspection", path, exc)

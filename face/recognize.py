@@ -7,7 +7,11 @@ startup — this box's history (CLAUDE.md, the CTranslate2 story) says never
 to trust a library's GPU reputation, so ``provider_report()`` is part of
 the API and the T2 progress log records the measured answer.
 
-The public pieces T9/T10 build against:
+The public pieces T9/T10/T13 build against:
+
+* ``detect(image) -> Face | None`` — the largest face's bounding box, from
+  the detector alone (no recognition pass); ``analyze(image)`` returns the
+  box *and* the embedding. Both feed the face tracker (T13.3).
 
 * ``embed(image) -> vector | None`` — the largest face in a BGR image (the
   spec's closest-person rule), as a unit-length 512-float vector; ``None``
@@ -75,14 +79,56 @@ def provider_report() -> list[str]:
     return onnxruntime.get_available_providers()
 
 
-def embed(image) -> np.ndarray | None:
-    """Unit-length embedding of the largest face in a BGR image, or None."""
+@dataclass
+class Face:
+    """The largest face in a frame: where it is, and (optionally) who."""
+    bbox: tuple            # (x1, y1, x2, y2) in pixels
+    embedding: np.ndarray | None = None
+
+    @property
+    def centre(self) -> tuple[float, float]:
+        x1, y1, x2, y2 = self.bbox
+        return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+
+    @property
+    def area(self) -> float:
+        x1, y1, x2, y2 = self.bbox
+        return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+
+def _largest(items, box):
+    return max(items, key=lambda f: (box(f)[2] - box(f)[0])
+               * (box(f)[3] - box(f)[1]))
+
+
+def analyze(image) -> Face | None:
+    """Largest face with its embedding (detection + recognition), or None."""
     faces = get_app().get(image)
     if not faces:
         return None
-    largest = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0])
-                  * (f.bbox[3] - f.bbox[1]))
-    return np.asarray(largest.normed_embedding, dtype=np.float32)
+    largest = _largest(faces, lambda f: f.bbox)
+    return Face(bbox=tuple(float(v) for v in largest.bbox[:4]),
+                embedding=np.asarray(largest.normed_embedding,
+                                     dtype=np.float32))
+
+
+def detect(image) -> Face | None:
+    """Largest face's bounding box only -- the detector alone, no
+    recognition pass. This is what the face tracker (T13.3) runs at 2 fps
+    during a conversation: presence and position, never identity (spec
+    section 4A pauses recognition mid-session)."""
+    app = get_app()
+    bboxes, _kpss = app.det_model.detect(image, max_num=0, metric="default")
+    if bboxes is None or len(bboxes) == 0:
+        return None
+    largest = _largest(list(bboxes), lambda b: b)
+    return Face(bbox=tuple(float(v) for v in largest[:4]))
+
+
+def embed(image) -> np.ndarray | None:
+    """Unit-length embedding of the largest face in a BGR image, or None."""
+    face = analyze(image)
+    return None if face is None else face.embedding
 
 
 def enroll_from_vectors(vectors) -> np.ndarray:

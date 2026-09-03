@@ -140,6 +140,7 @@ whatever arrives.
 | `nod` | Agree, greet, confirm |
 | `shake_head` | Disagree, decline |
 | `wiggle_antennas` | Delight |
+| `perform` | A recorded dance/emotion, `spin`, or `wiggle` (T13.4; names in `moves.py`) |
 | `reset_pose` | Back to neutral |
 | `get_robot_status` | Read its own joints, motor and estop state |
 

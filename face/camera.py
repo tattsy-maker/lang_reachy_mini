@@ -47,6 +47,7 @@ Usage::
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -83,6 +84,12 @@ class Camera:
             else:
                 self._kind = "video"
                 self._video_path = path
+
+    @property
+    def is_live(self) -> bool:
+        """True for a V4L2 device (paced by the hardware); False for a file
+        or image directory (paced by the consumer)."""
+        return self._kind == "device"
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -164,3 +171,101 @@ class Camera:
             frame = cv2.imread(str(path))
             if frame is not None:
                 yield frame
+
+
+class FrameHub:
+    """One camera, many readers (T13.3).
+
+    A V4L2 device can only be streamed by one ``VideoCapture`` at a time,
+    and three things want the booth camera at once: the session watcher
+    (presence + identity), the face tracker (position, every frame), and
+    enrollment (a few snapshots mid-conversation). The hub owns the single
+    ``Camera``, pumps it on a thread, and hands every reader the newest
+    frame it has not seen yet -- a slow reader skips frames rather than
+    lagging behind a backlog.
+
+    File and directory sources are paced at the hub's ``fps`` on the wall
+    clock, so a fixture clip behaves like a live camera to its readers
+    (the T1 ``Camera`` deliberately does not sleep for files; the hub does,
+    once, for everyone). When a file source ends, ``exhausted`` goes True
+    and every ``frames()`` generator returns.
+
+        hub = FrameHub(0, fps=2.0).start()
+        for frame in hub.frames():         # any number of these
+            ...
+        hub.close()
+    """
+
+    def __init__(self, source, fps: float = 2.0):
+        self.fps = fps
+        self._camera = Camera(source, fps=fps)
+        self._cond = threading.Condition()
+        self._seq = 0
+        self._frame = None
+        self._closed = False
+        self.exhausted = False
+        self._thread: threading.Thread | None = None
+
+    @property
+    def is_live(self) -> bool:
+        return self._camera.is_live
+
+    def start(self) -> "FrameHub":
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._pump, daemon=True,
+                                            name="frame-hub")
+            self._thread.start()
+        return self
+
+    def _pump(self) -> None:
+        interval = 1.0 / self.fps
+        try:
+            for frame in self._camera.frames():
+                if self._closed:
+                    break
+                with self._cond:
+                    self._seq += 1
+                    self._frame = frame
+                    self._cond.notify_all()
+                if not self._camera.is_live:
+                    time.sleep(interval)
+        finally:
+            with self._cond:
+                self.exhausted = True
+                self._cond.notify_all()
+
+    def latest(self):
+        """(seq, frame) of the newest frame; frame is None before the first."""
+        with self._cond:
+            return self._seq, self._frame
+
+    def next_after(self, seq: int, timeout: float | None = None):
+        """Block until a frame newer than ``seq`` exists. Returns
+        (seq, frame); frame is None on timeout or when the source is done."""
+        with self._cond:
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while self._seq <= seq and not self.exhausted:
+                remaining = (None if deadline is None
+                             else max(0.0, deadline - time.monotonic()))
+                if remaining == 0.0:
+                    return self._seq, None
+                self._cond.wait(remaining)
+            if self._seq <= seq:
+                return self._seq, None
+            return self._seq, self._frame
+
+    def frames(self, timeout: float | None = None):
+        """Yield each new frame; returns when the source is exhausted (or,
+        with a timeout, when no frame arrives in time)."""
+        seq = 0
+        while True:
+            seq, frame = self.next_after(seq, timeout)
+            if frame is None:
+                return
+            yield frame
+
+    def close(self) -> None:
+        self._closed = True
+        with self._cond:
+            self._cond.notify_all()
+        self._camera.close()

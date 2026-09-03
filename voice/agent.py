@@ -94,15 +94,19 @@ from piper_tts import (                                                 # noqa: 
 from tutor_mode import (                                                # noqa: E402
     BRIEFING_SESSIONS,
     DEFAULT_LEARNERS_ROOT,
+    PERSONAS,
     STRANGER_BRIEFING,
     UNSURE_BRIEFING,
     CurrentLearner,
     LearnerStore,
     build_briefing,
     build_enrollment_tools,
+    build_persona,
     build_tutor_tools,
     load_learner,
+    voice_cue,
 )
+from tracking import FaceTracker, TrackingLoop                          # noqa: E402
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
@@ -187,7 +191,9 @@ that you cannot speak that one yet.
 You have a body, so use it. Call your movement tools naturally as part of \
 talking: nod when you agree, shake your head when you disagree or cannot do \
 something, look toward whatever you are talking about, and wiggle your antennas \
-when you are pleased. Do not narrate your own movements -- just move, and let \
+when you are pleased. If someone asks you to dance, spin, or show a trick, \
+call perform with a move from its list, and say something short while it \
+plays. Do not narrate your own movements -- just move, and let \
 the person watching see it. Do not announce that you are about to use a tool. If someone asks you to \
 speak louder or quieter, call set_volume.
 
@@ -293,7 +299,18 @@ def build_audio_tools() -> list:
     )]
 
 
-def build_tools(robot: RobotLink) -> list:
+def build_tools(robot: RobotLink, tracker: FaceTracker | None = None) -> list:
+    """The motion tools. With a face tracker (T13.3) a deliberate head or
+    body move suspends tracking for a few seconds and tells the tracker
+    where it put the robot, so the two never fight over yaw."""
+    from moves import LIBRARY, describe as describe_moves
+
+    def deliberate(seconds: float, **dofs: float) -> None:
+        if tracker is not None:
+            tracker.suspend(seconds, stale=not dofs)
+            if dofs:
+                tracker.set_estimate(**dofs)
+
     async def move_head(params):
         a = params.arguments
         dofs = {}
@@ -306,14 +323,35 @@ def build_tools(robot: RobotLink) -> list:
         if not dofs:
             await params.result_callback({"error": "give at least one angle"})
             return
-        robot.posture(duration=float(a.get("duration", 0.6)), **dofs)
+        duration = float(a.get("duration", 0.6))
+        robot.posture(duration=duration, **dofs)
+        deliberate(duration + 3.0, **{k: v for k, v in dofs.items()
+                                      if k in ("head_yaw", "head_pitch")})
         await params.result_callback({"moving": True, **dofs})
 
     async def turn_body(params):
         a = params.arguments
-        robot.posture(duration=float(a.get("duration", 1.0)),
-                      body_yaw=math.radians(float(a["degrees"])))
+        duration = float(a.get("duration", 1.0))
+        body_yaw = math.radians(float(a["degrees"]))
+        robot.posture(duration=duration, body_yaw=body_yaw)
+        deliberate(duration + 3.0, body_yaw=body_yaw)
         await params.result_callback({"turning": True})
+
+    async def perform(params):
+        name = str(params.arguments.get("move", "dance")).strip().lower()
+        spec = LIBRARY.get(name)
+        if spec is None:
+            await params.result_callback(
+                {"error": "unknown move; choose one of "
+                          + ", ".join(LIBRARY)})
+            return
+        robot.perform(spec.name)
+        if tracker is not None:
+            tracker.suspend(spec.seconds + 1.0, stale=True)
+        logger.info("perform: %s (%.0fs)", spec.name, spec.seconds)
+        await params.result_callback(
+            {"performing": spec.name, "seconds": spec.seconds,
+             "note": "keep talking while it plays"})
 
     async def nod(params):
         robot.nod(times=int(params.arguments.get("times", 2)))
@@ -332,6 +370,9 @@ def build_tools(robot: RobotLink) -> list:
 
     async def reset_pose(params):
         robot.home(duration=1.0)
+        if tracker is not None:
+            tracker.suspend(1.5, stale=False)
+            tracker.reset()
         await params.result_callback({"homing": True})
 
     async def get_robot_status(params):
@@ -394,6 +435,19 @@ def build_tools(robot: RobotLink) -> list:
             description="Flick both antennas. Use it to show delight, "
                         "excitement, or playfulness.",
             properties={}, required=[], handler=wiggle_antennas,
+        ),
+        FunctionSchema(
+            name="perform",
+            description="Play a recorded move: a dance, a spin, or an "
+                        "emotion. Use when asked to dance, spin, or show "
+                        "what you can do, or to celebrate. Moves: "
+                        + describe_moves() + ". Say something short "
+                        "while it plays; it takes a few seconds.",
+            properties={"move": {"type": "string",
+                                 "enum": list(LIBRARY),
+                                 "description": "which move"}},
+            required=["move"],
+            handler=perform,
         ),
         FunctionSchema(
             name="reset_pose",
@@ -752,17 +806,33 @@ emit the tool call in that same turn, alongside anything you say."""
             ),
         )
 
+    # Face tracking (T13.3): on when there is a camera and a robot, unless
+    # --no-track. The tracker owns head/body yaw; embodiment then leaves
+    # yaw out of its talking sway (the DOF split in embodiment.py).
+    tracking = bool(robot and args.face_source and not args.no_track)
+    embodiment = Embodiment(robot, enabled=robot is not None,
+                            sway=not args.no_sway, own_yaw=not tracking)
+    tracker = FaceTracker(robot, embodiment=embodiment) if tracking else None
+    if tracking:
+        logger.info("tracking: head and body follow the largest face")
+
+    # Booth persona (T13.5/T13.6): quips and the wishlist question. Goes on
+    # the base prompt so the session runner's rebuilt prompts carry it too.
+    base_prompt += build_persona(args.persona)
+
     # Each FunctionSchema carries its own handler, so pipecat dispatches
     # straight from the schema. Calling register_function() as well is
     # redundant and pipecat warns about it.
-    tools = (build_tools(robot) if robot else []) + build_audio_tools()
+    tools = (build_tools(robot, tracker) if robot else []) + build_audio_tools()
 
     # Tutor mode: append the right briefing to the system prompt and
     # register the memory (and, with a face source, enrollment) tools next
     # to the motion tools. Works with or without a robot -- these tools
     # only touch the learner store and the camera.
     system_prompt = base_prompt
-    holder = store = None
+    holder = store = hub = None
+    voice_identity = voice_collector = None
+    session_runner = None
     if args.session and not args.face_source:
         raise SystemExit("--session needs --face-source (who would it watch?)")
     if args.learner or args.face_source:
@@ -798,10 +868,42 @@ emit the tool call in that same turn, alongside anything you say."""
             else:  # unknown face, or no face at all: same stranger flow
                 system_prompt += STRANGER_BRIEFING.format(
                     languages=spoken_names)
-        tools = tools + build_tutor_tools(store, holder)
+        tools = tools + build_tutor_tools(store, holder,
+                                          wishes_path=args.wishes_file)
+
+        # Voice print (T13.9): a second identity signal, fused with the
+        # face's verdict. Samples come from the raw input audio (or from
+        # --voice-source in scripted runs); actions become spoken cues
+        # through say_cue, defined once the pipeline exists below.
+        if not args.no_voice_id:
+            from voiceid import VoiceCollector, VoiceIdentity
+            voice_identity = VoiceIdentity(store, holder)
+
+            async def on_voice_sample(vector, secs):
+                if session_runner is not None:
+                    session_runner.note_voice()   # speech is presence
+                action = voice_identity.on_sample(vector)
+                if action in ("challenge", "downgrade", "confirmed"):
+                    who = holder.learner or holder.candidate
+                    cue = voice_cue(action, who, store)
+                    if cue:
+                        await say_cue(cue)
+
+            voice_collector = VoiceCollector(on_voice_sample)
+            logger.info("voice id: on (ECAPA prints; samples from %s)",
+                        "--voice-source" if args.voice_source else "the mic")
+        # One camera, many readers (T13.3): the session watcher, the
+        # tracker and enrollment all read from a shared hub whenever any
+        # loop will hold the camera for the whole run.
+        hub = None
+        if args.face_source and (args.session or tracking):
+            from face.camera import FrameHub
+            hub = FrameHub(args.face_source, fps=2.0).start()
         if args.face_source:
             tools = tools + build_enrollment_tools(
-                store, holder, args.face_source)
+                store, holder, args.face_source,
+                frames_factory=(hub.frames if hub is not None else None),
+                voice_identity=voice_identity)
         if holder.learner:
             logger.info("tutor mode: student %s (%s %s, %d prior sessions, "
                         "tier %s)", holder.learner.name, holder.learner.level,
@@ -883,9 +985,6 @@ emit the tool call in that same turn, alongside anything you say."""
             ),
         )
 
-    embodiment = Embodiment(robot, enabled=robot is not None,
-                            sway=not args.no_sway)
-
     if args.speech == "cloud":
         # T8: the three local speech stages collapse into one streaming
         # speech-to-speech service; motion + memory tools ride along.
@@ -905,17 +1004,26 @@ emit the tool call in that same turn, alongside anything you say."""
         gemini = GeminiLiveLLMService(**gemini_kwargs)
         logger.info("speech: cloud (Gemini Live, model %s)",
                     args.gemini_model or "pipecat default")
-        pipeline = Pipeline([
-            transport.input(),
-            aggregators.user(),
+        # The voice tap sits after the user aggregator: its mute strategy
+        # drops the audio while the robot speaks, so the tap never hears
+        # the robot's own voice.
+        stages = [transport.input(), aggregators.user()]
+        if voice_collector is not None:
+            stages.append(voice_collector.as_processor())
+        pipeline = Pipeline(stages + [
             gemini,
             embodiment,      # observes speaking state, passes frames through
             transport.output(),
             aggregators.assistant(),
         ])
     else:
-        pipeline = Pipeline([
-            transport.input(),
+        # Locally the STT consumes the audio, so the tap goes before it;
+        # it drops the robot's own voice itself, from the bot-speaking
+        # frames the output transport pushes upstream.
+        stages = [transport.input()]
+        if voice_collector is not None:
+            stages.append(voice_collector.as_processor())
+        pipeline = Pipeline(stages + [
             stt,
             language_router,  # switches the voice to match what was heard
             aggregators.user(),
@@ -933,22 +1041,49 @@ emit the tool call in that same turn, alongside anything you say."""
         enable_usage_metrics=True,
     ))
 
+    async def say_cue(text: str) -> None:
+        """Inject a user-turn cue mid-conversation, whichever brain runs.
+        Local: through the aggregator. Cloud: Gemini keeps its history
+        server-side and ignores the aggregator after turn one, so use
+        the service's own injection path (the one --say uses)."""
+        if args.speech == "cloud":
+            await gemini._create_single_response(
+                [{"role": "user", "content": text}])
+        else:
+            await task.queue_frames([LLMMessagesAppendFrame(
+                messages=[{"role": "user", "content": text}], run_llm=True)])
+
     if args.speech == "local" and not args.no_warmup:
         await warm_up(stt, tts, args.sample_rate)
+    if voice_collector is not None and not args.no_warmup:
+        from voiceid import warm_up as warm_up_voiceid
+        await asyncio.to_thread(warm_up_voiceid)
 
     # Session lifecycle (T10): a background task watches the face source
     # and starts/ends tutoring sessions on the live pipeline.
-    session_task = None
+    session_task = tracking_task = None
     if args.session:
         from session import SessionRunner
         session_runner = SessionRunner(
             source=args.face_source, store=store, holder=holder,
             context=context, task=task, base_prompt=base_prompt,
             languages=spoken_names, robot=robot, stt=stt,
-            stable_secs=args.stable_secs, absent_secs=args.absent_secs)
+            stable_secs=args.stable_secs, absent_secs=args.absent_secs,
+            hub=hub, tracker=tracker, attract_secs=args.attract_secs,
+            voice_identity=voice_identity)
+        # Speech is presence (T13.2): a visitor out of frame but talking
+        # is not gone.
+        embodiment.on_user_speech = session_runner.note_voice
         session_task = asyncio.create_task(session_runner.run())
         logger.info("session mode: watching for a face (stable %.1fs, "
-                    "walk-away %.0fs)", args.stable_secs, args.absent_secs)
+                    "still-there at %.0fs, walk-away %.0fs%s)",
+                    args.stable_secs, args.absent_secs * 2 / 3,
+                    args.absent_secs,
+                    (", attractor after %.0fs" % args.attract_secs)
+                    if args.attract_secs > 0 else "")
+    elif tracker is not None and hub is not None:
+        tracking_task = asyncio.create_task(
+            TrackingLoop(hub, tracker).run())
 
     # --say injects an utterance as if it had been transcribed, which exercises
     # the whole loop (model -> tools -> motion -> speech) without a microphone.
@@ -960,6 +1095,9 @@ emit the tool call in that same turn, alongside anything you say."""
                 await asyncio.sleep(args.say_delay if i == 0 else args.say_gap)
                 logger.info("injecting utterance %d/%d: %r",
                             i + 1, len(args.say), utterance)
+                if voice_collector is not None and args.voice_source:
+                    # Scripted voice: this file is "what was heard".
+                    await voice_collector.inject_wav(args.voice_source)
                 if args.speech == "cloud" and i > 0:
                     # The FIRST turn must go through the aggregator: it
                     # seeds the service's context object (without which
@@ -994,10 +1132,13 @@ emit the tool call in that same turn, alongside anything you say."""
     try:
         await runner.run(task)
     finally:
-        if session_task is not None:
-            session_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await session_task
+        for bg in (session_task, tracking_task):
+            if bg is not None:
+                bg.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await bg
+        if hub is not None:
+            hub.close()
         if robot is not None:
             logger.info("returning the robot to neutral and taking media back")
             try:
@@ -1112,8 +1253,29 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--stable-secs", type=float, default=2.0,
                    help="how long a face must be present before greeting")
     g.add_argument("--absent-secs", type=float, default=60.0,
-                   help="how long a face must be gone before the session "
-                        "ends and notes are saved")
+                   help="how long a face must be gone (and no speech "
+                        "heard) before the session ends and notes are "
+                        "saved; the robot asks 'still there?' at two "
+                        "thirds of this")
+    g.add_argument("--attract-secs", type=float, default=0.0,
+                   help="session mode: with nobody in frame this long, "
+                        "play a short move every few minutes to draw "
+                        "people in (0 = off)")
+    g.add_argument("--persona", default="plain", choices=list(PERSONAS),
+                   help="booth: a few gentle quips and the wishlist "
+                        "question; plain: none")
+    g.add_argument("--wishes-file", default=None, metavar="PATH",
+                   help="where record_wish appends (default booth/wishes.md)")
+    g.add_argument("--no-voice-id", action="store_true",
+                   help="do not keep or check voice prints (on by default "
+                        "in tutor mode; prints are computed locally)")
+    g.add_argument("--voice-source", default=None, metavar="WAV",
+                   help="testing: hear this wav as the visitor's voice at "
+                        "every --say turn instead of the microphone")
+    g.add_argument("--no-track", action="store_true",
+                   help="do not follow the visitor's face with head and "
+                        "body (tracking is on whenever there is a camera "
+                        "and a robot)")
 
     g = p.add_argument_group("embodiment")
     g.add_argument("--no-sway", action="store_true",

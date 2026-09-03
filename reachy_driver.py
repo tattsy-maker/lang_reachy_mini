@@ -5,7 +5,9 @@ The robot's nine degrees of freedom are exposed as Device Connect RPCs, its
 state changes as events, and its telemetry as a periodic snapshot:
 
     reads     get_posture, get_limits, report_status, get_motion
-    writes    set_dof, goto_posture, home, look_at, nod, shake, wake_up, sleep
+    writes    set_dof, goto_posture, home, look_at, nod, shake, wake_up, sleep,
+              play_move (recorded dances/emotions + the built-in spin)
+    reads     list_moves
     control   set_motors, stop, clear_estop, cancel_motion, set_media_released
     events    motion_started, motion_progress, motion_completed,
               motors_changed, estop_changed, link_health_changed, telemetry
@@ -57,7 +59,7 @@ logger = logging.getLogger(__name__)
 # voice/robot_link.py) use this to decide whether to wait on a
 # motion_completed event or just take the RPC result at face value.
 MOTION_PROCEDURES = ("goto_posture", "home", "look_at", "nod", "shake",
-                     "wake_up", "sleep")
+                     "wake_up", "sleep", "play_move")
 
 
 class EstopEngaged(RuntimeError):
@@ -459,6 +461,11 @@ class ReachyMiniDriver(DeviceDriver):
         if m is not None and m["status"] == "running":
             m["cancel_requested"] = reason
         if task is not None and not task.done():
+            if m is not None and m.get("kind") == "play_move":
+                # Recorded moves run inside a vendor call on a worker
+                # thread; cancelling the task alone would leave the
+                # trajectory streaming. Ask the vendor loop to stop first.
+                await asyncio.to_thread(self._target.cancel_move)
             task.cancel()
             try:
                 await task
@@ -693,6 +700,65 @@ class ReachyMiniDriver(DeviceDriver):
         return (max(1, int(times)),
                 min(abs(float(amplitude)), LIMITS[dof][1]),
                 max(0.05, float(period) / 2.0))
+
+    @rpc(labels={"direction": "read"})
+    async def list_moves(self) -> Dict[str, Any]:
+        """The curated recorded-move library: name, seconds, description."""
+        from moves import LIBRARY
+        return {"moves": [{"name": m.name, "seconds": m.seconds,
+                           "description": m.description}
+                          for m in LIBRARY.values()]}
+
+    @rpc(labels={"direction": "write", "safety": "critical", "motion": "true"})
+    async def play_move(self, move: str) -> Dict[str, Any]:
+        """Play a named move from the curated library. Returns a motion_id,
+        does not wait; emits motion_progress per phase.
+
+        Recorded moves (dances, emotions) stream from the vendor's move
+        libraries. ``spin`` is built in: a full body-yaw sweep one way,
+        all the way back the other, and home. ``wiggle`` flicks the
+        antennas. Unknown names fail with the list of valid ones.
+
+        Args:
+            move: One of the names ``list_moves`` reports.
+        """
+        from moves import LIBRARY
+        spec = LIBRARY.get(str(move))
+        if spec is None:
+            raise ValueError("unknown move %r; expected one of %s"
+                             % (move, ", ".join(LIBRARY)))
+
+        async def run(motion_id):
+            if spec.name == "spin":
+                lo, hi = LIMITS["body_yaw"]
+                base = self._target.get_cmd("body_yaw")
+                for phase, target, secs in (("out", hi * 0.95, 1.6),
+                                            ("back", lo * 0.95, 3.0),
+                                            ("home", base, 1.6)):
+                    self._checkpoint(motion_id)
+                    await self._progress(motion_id, "play_move", phase=phase,
+                                         name="spin")
+                    await asyncio.to_thread(self._target.goto, secs,
+                                            body_yaw=target)
+                return self._target.status()["commanded"]
+            if spec.name == "wiggle":
+                await self._progress(motion_id, "play_move", phase="flick",
+                                     name="wiggle")
+                left = self._target.get_cmd("antenna_left")
+                right = self._target.get_cmd("antenna_right")
+                await asyncio.to_thread(self._target.goto, 0.25,
+                                        antenna_left=1.3, antenna_right=-1.3)
+                self._checkpoint(motion_id)
+                return await asyncio.to_thread(self._target.goto, 0.25,
+                                               antenna_left=left,
+                                               antenna_right=right)
+            await self._progress(motion_id, "play_move", phase="playing",
+                                 name=spec.name, seconds=spec.seconds)
+            return await asyncio.to_thread(self._target.play_move, spec.name)
+
+        return await self._begin("play_move",
+                                 {"name": spec.name, "seconds": spec.seconds},
+                                 run)
 
     @rpc(labels={"direction": "write", "safety": "critical", "motion": "true"})
     async def wake_up(self) -> Dict[str, Any]:

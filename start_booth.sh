@@ -13,6 +13,11 @@
 #   BOOTH_AUDIO_DEVICE  substring of the mic/speaker device (default the
 #                       robot's own; T11 mic test decides the handheld name)
 #   BOOTH_FACE_SOURCE   camera for face recognition (default 0 = /dev/video0)
+#   BOOTH_ABSENT_SECS   walk-away timer (default 60; "still there?" at 2/3)
+#   BOOTH_ATTRACT_SECS  idle attractor: nobody in frame this long -> a short
+#                       dance every few minutes (default 120; 0 = off)
+#   BOOTH_PERSONA       booth (default: gentle quips + wishlist question)
+#                       or plain
 #   BOOTH_EXTRA_AGENT   extra flags appended to the agent command
 #
 # Startup takes ~40s (robot connect ~15s, model warmup ~10s) -- start it
@@ -24,6 +29,9 @@ cd "$(dirname "$0")"
 MODEL="${BOOTH_MODEL:-claude-haiku-4-5-20251001}"
 AUDIO_DEVICE="${BOOTH_AUDIO_DEVICE:-Reachy Mini Audio}"
 FACE_SOURCE="${BOOTH_FACE_SOURCE:-0}"
+ABSENT_SECS="${BOOTH_ABSENT_SECS:-60}"
+ATTRACT_SECS="${BOOTH_ATTRACT_SECS:-120}"
+PERSONA="${BOOTH_PERSONA:-booth}"
 ZENOH_LISTEN="tcp/0.0.0.0:7447"
 BROKER="zenoh://127.0.0.1:7447"
 SERVE_LOG="serve.log"
@@ -46,7 +54,8 @@ grep -qs "ANTHROPIC_API_KEY=" voice/.env && ok "Anthropic key in voice/.env" \
 grep -qs . /proc/asound/cards && ok "sound card visible" \
     || die "no sound card (audio group membership? see CLAUDE.md)"
 
-SESSION_FLAGS=(--session --face-source "$FACE_SOURCE" --absent-secs 60)
+SESSION_FLAGS=(--session --face-source "$FACE_SOURCE"
+               --absent-secs "$ABSENT_SECS" --attract-secs "$ATTRACT_SECS")
 if [ -r "/dev/video$FACE_SOURCE" ] 2>/dev/null || [ -r "$FACE_SOURCE" ]; then
     ok "camera readable (face source $FACE_SOURCE)"
 else
@@ -58,6 +67,20 @@ if [ -f voice/piper_voices/ru_RU-irina-medium.onnx ]; then
     ok "Piper voices present (Russian/Mandarin available)"
 else
     warn "no Piper voices -- ru/zh disabled (voice/piper_tts.py has the fetch)"
+fi
+# Recorded moves (dances, emotions) come from two HuggingFace datasets.
+# Fetch them now, while there is time, never at the moment someone says
+# "can you dance?" -- and never let venue internet block the start.
+if .venv/bin/python moves.py --cached >/dev/null 2>&1; then
+    ok "recorded moves cached (dances + emotions)"
+else
+    warn "recorded moves not cached; fetching (60s cap) ..."
+    if timeout 60 .venv/bin/python moves.py --preload >/dev/null 2>&1 \
+       && .venv/bin/python moves.py --cached >/dev/null 2>&1; then
+        ok "recorded moves fetched"
+    else
+        warn "recorded moves unavailable -- 'perform' will fail except spin/wiggle"
+    fi
 fi
 
 say "-- starting robot serve (zenoh $ZENOH_LISTEN) --"
@@ -95,6 +118,7 @@ voice/.venv/bin/python voice/agent.py \
     --broker "$BROKER" \
     --model "$MODEL" \
     --audio-device "$AUDIO_DEVICE" \
+    --persona "$PERSONA" \
     "${SESSION_FLAGS[@]}" \
     ${BOOTH_EXTRA_AGENT:-} \
     >> "$AGENT_LOG" 2>&1 &
@@ -141,6 +165,8 @@ say ""
 say "Booth checklist:"
 say "  * robot at neutral, antennas up?"
 say "  * walk up: greeted (by name if enrolled) within ~3s of a stable face?"
+say "  * step left/right: head and body follow? 'can you dance?' -> a dance?"
+say "  * walk-away: 'still there?' at ${ABSENT_SECS}*2/3 s, goodbye + notes at ${ABSENT_SECS}s"
 say "  * demo insurance: kill and rerun with BOOTH_EXTRA_AGENT='--say \"...\"'"
 say "  * signage up (booth/SIGNAGE.md), one chair, one mic"
 say "Ctrl-C stops everything and wipes guest profiles."

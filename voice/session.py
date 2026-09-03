@@ -18,8 +18,24 @@ Two layers:
   watching.
 
 The two methods that touch pipecat (``_queue_user_turn``) and the robot
-(``_robot_neutral``) are deliberately small and overridable, so the
-runner's start/end choreography is testable without an LLM.
+(``_robot_neutral``, ``_perform``) are deliberately small and overridable,
+so the runner's start/end choreography is testable without an LLM.
+
+Presence policy (T13.2, from the family debrief "nobody could say how
+long it takes to forget you"):
+
+* the visitor's *speech* counts as presence (``on_voice``), so someone who
+  steps out of frame but keeps talking is never timed out;
+* at ``ask_fraction`` of the walk-away timer the robot asks once, out
+  loud, whether they are still there ("ask" advice);
+* when the timer expires the robot says a one-line goodbye *before* the
+  notes save, so the save is never silent for someone still in earshot;
+* every transition is logged as ``presence: face|voice|asking|gone``.
+
+Also here: the idle ``Attractor`` (T13.4) -- with nobody in frame for a
+while, play a short recorded move every few minutes so the booth reads
+as alive from across the hall -- and the feed to the face tracker
+(T13.3), which shares the runner's frames.
 
 Spec note (§4A): recognition is *supposed* to be paused during
 conversation. Presence still has to be tracked to detect the walk-away,
@@ -56,26 +72,35 @@ prompted anyway, answer briefly in English."""
 WALKUP_CUE = ("(A visitor has just walked up to you. Follow your "
               "instructions and greet them now.)")
 
-WALKAWAY_CUE = ("(The visitor has walked away and cannot hear you anymore. "
-                "Do not speak. If you were tutoring someone this session, "
-                "call save_session_notes now with your honest summary.)")
+WALKAWAY_CUE = ("(The visitor seems to have left. Say one short goodbye "
+                "sentence in case they can still hear you, and in this "
+                "same turn, if you were tutoring someone this session, call "
+                "save_session_notes with your honest summary.)")
+
+STILL_THERE_CUE = ("(You have not seen or heard the visitor for a while. "
+                   "Ask, in one short sentence in the lesson language, "
+                   "whether they are still there. Nothing else.)")
 
 
 class SessionMachine:
-    """Watch/active state with stability and walk-away timers."""
+    """Watch/active state with stability, still-there and walk-away timers."""
 
-    def __init__(self, stable_secs: float = 2.0, absent_secs: float = 60.0):
+    def __init__(self, stable_secs: float = 2.0, absent_secs: float = 60.0,
+                 ask_fraction: float = 2.0 / 3.0):
         self.stable_secs = stable_secs
         self.absent_secs = absent_secs
+        self.ask_fraction = ask_fraction
         self.state = WATCHING
         self._first_seen: float | None = None
         self._last_seen: float | None = None
+        self._asked = False
 
     def on_face(self, present: bool, now: float) -> str | None:
-        """Feed one observation; returns "start", "end", or None.
+        """Feed one observation; returns "start", "ask", "end", or None.
 
-        The caller confirms the transition with session_started() /
-        session_ended() — until it does, the advice repeats.
+        The caller confirms a transition with session_started() /
+        session_asked() / session_ended() — until it does, the advice
+        repeats.
         """
         if self.state == WATCHING:
             if not present:
@@ -90,21 +115,78 @@ class SessionMachine:
         # ACTIVE
         if present:
             self._last_seen = now
+            self._asked = False
             return None
-        if (self._last_seen is not None
-                and now - self._last_seen >= self.absent_secs):
+        if self._last_seen is None:
+            return None
+        gone = now - self._last_seen
+        if gone >= self.absent_secs:
             return "end"
+        if not self._asked and gone >= self.absent_secs * self.ask_fraction:
+            return "ask"
         return None
+
+    def on_voice(self, now: float) -> None:
+        """The visitor spoke: that is presence too (T13.2). Voice never
+        *starts* a session -- a face must -- but it keeps one alive."""
+        if self.state == ACTIVE:
+            self._last_seen = now
+            self._asked = False
+
+    def seconds_absent(self, now: float) -> float:
+        if self.state != ACTIVE or self._last_seen is None:
+            return 0.0
+        return max(0.0, now - self._last_seen)
 
     def session_started(self, now: float) -> None:
         self.state = ACTIVE
         self._last_seen = now
         self._first_seen = None
+        self._asked = False
+
+    def session_asked(self) -> None:
+        self._asked = True
 
     def session_ended(self) -> None:
         self.state = WATCHING
         self._first_seen = None
         self._last_seen = None
+        self._asked = False
+
+
+class Attractor:
+    """Idle attractor timing (T13.4): with nobody in frame for
+    ``after_secs``, fire, then again every ``every_secs`` while still
+    empty. Any face silences it and restarts the clock. ``after_secs``
+    of zero disables it."""
+
+    def __init__(self, after_secs: float = 0.0, every_secs: float = 180.0):
+        self.after_secs = after_secs
+        self.every_secs = every_secs
+        self._empty_since: float | None = None
+        self._last_fired: float | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.after_secs > 0
+
+    def on_face(self, present: bool, now: float) -> bool:
+        if not self.enabled:
+            return False
+        if present:
+            self._empty_since = None
+            self._last_fired = None
+            return False
+        if self._empty_since is None:
+            self._empty_since = now
+            return False
+        if now - self._empty_since < self.after_secs:
+            return False
+        if (self._last_fired is not None
+                and now - self._last_fired < self.every_secs):
+            return False
+        self._last_fired = now
+        return True
 
 
 class SessionRunner:
@@ -114,7 +196,9 @@ class SessionRunner:
                  base_prompt: str, languages: str, robot=None, stt=None,
                  stable_secs: float = 2.0, absent_secs: float = 60.0,
                  fps: float = 2.0, samples: int = 3,
-                 save_wait_secs: float = 30.0):
+                 save_wait_secs: float = 30.0, hub=None, tracker=None,
+                 attract_secs: float = 0.0, attract_every: float = 180.0,
+                 voice_identity=None):
         self.source = source
         self.store = store
         self.holder = holder
@@ -125,10 +209,23 @@ class SessionRunner:
         self.robot = robot
         self.stt = stt  # optional: bilingual priming per learner (T7)
         self.machine = SessionMachine(stable_secs, absent_secs)
+        self.attractor = Attractor(attract_secs, attract_every)
+        self.hub = hub            # shared camera (T13.3); else own Camera
+        self.tracker = tracker    # FaceTracker fed from this loop, if any
+        self.voice_identity = voice_identity   # T13.9, reset per visitor
         self.fps = fps
         self.samples = samples
         self.save_wait_secs = save_wait_secs
         self._recent_vectors: list = []
+        self._voice_at: float | None = None
+        self._voice_seen: float | None = None
+        self._presence = "gone"
+
+    # -- presence inputs from the pipeline ----------------------------------
+
+    def note_voice(self) -> None:
+        """Called (from the pipeline) whenever the visitor starts speaking."""
+        self._voice_at = time.monotonic()
 
     # -- the two side-effect seams, overridable in tests -------------------
 
@@ -138,11 +235,28 @@ class SessionRunner:
             messages=[{"role": "user", "content": text}], run_llm=True)])
 
     async def _robot_neutral(self) -> None:
+        if self.tracker is not None:
+            self.tracker.reset()
         if self.robot is not None:
             try:
                 self.robot.home(duration=1.0)
             except Exception as exc:                            # noqa: BLE001
                 logger.warning("session: robot home failed: %s", exc)
+
+    async def _perform(self, name: str, seconds: float) -> None:
+        """The idle attractor's move (overridable in tests)."""
+        if self.tracker is not None:
+            self.tracker.suspend(seconds)
+        if self.robot is not None:
+            try:
+                self.robot.perform(name)
+            except Exception as exc:                            # noqa: BLE001
+                logger.warning("session: attractor move failed: %s", exc)
+
+    def _log_presence(self, state: str) -> None:
+        if state != self._presence:
+            self._presence = state
+            logger.info("presence: %s", state)
 
     # -- choreography ------------------------------------------------------
 
@@ -193,6 +307,8 @@ class SessionRunner:
         from face import recognize
         face = recognize.enroll_from_vectors(self._recent_vectors)
         self.holder.reset()
+        if self.voice_identity is not None:
+            self.voice_identity.reset()
         briefing = self._briefing_for(face)
         self.context.set_messages([
             {"role": "system", "content": self.base_prompt + briefing}])
@@ -200,10 +316,19 @@ class SessionRunner:
         logger.info("session: started")
         await self._queue_user_turn(WALKUP_CUE)
 
+    async def ask_still_there(self) -> None:
+        """Two-thirds into the walk-away timer: one spoken check."""
+        self._log_presence("asking")
+        logger.info("session: nobody seen or heard for %.0fs, asking",
+                    self.machine.seconds_absent(time.monotonic()))
+        self.machine.session_asked()
+        await self._queue_user_turn(STILL_THERE_CUE)
+
     async def end_session(self) -> None:
+        self._log_presence("gone")
         learner = self.holder.learner
         if learner is not None and learner.id not in self.holder.saved_ids:
-            logger.info("session: walk-away, asking for notes on %s",
+            logger.info("session: walk-away, goodbye + notes on %s",
                         learner.id)
             await self._queue_user_turn(WALKAWAY_CUE)
             deadline = time.monotonic() + self.save_wait_secs
@@ -214,6 +339,8 @@ class SessionRunner:
                 logger.warning("session: notes were never saved for %s",
                                learner.id)
         self.holder.reset()
+        if self.voice_identity is not None:
+            self.voice_identity.reset()
         if self.stt is not None and hasattr(self.stt, "initial_prompt"):
             self.stt.initial_prompt = None
         self.context.set_messages([
@@ -225,12 +352,18 @@ class SessionRunner:
     # -- the frame loop ----------------------------------------------------
 
     async def run(self) -> None:
-        from face.camera import Camera
+        import random
         from face import recognize
-        from face_id import parse_source
+        from moves import ATTRACT_MOVES, LIBRARY
 
-        camera = Camera(parse_source(self.source), fps=self.fps)
-        frames = camera.frames()
+        if self.hub is not None:
+            source = self.hub
+            frames = self.hub.frames()
+        else:
+            from face.camera import Camera
+            from face_id import parse_source
+            source = Camera(parse_source(self.source), fps=self.fps)
+            frames = source.frames()
         exhausted = False
         try:
             while True:
@@ -238,23 +371,59 @@ class SessionRunner:
                 if not exhausted:
                     frame = await asyncio.to_thread(next, frames, None)
                     if frame is None:
-                        exhausted = True  # file source ran out: absent forever
+                        # A hub only hands out None when its source is
+                        # done; a file source that ran out is absent
+                        # forever (the simulated walk-away).
+                        exhausted = True
                 if frame is None:
                     await asyncio.sleep(1.0 / self.fps)
-                    vector = None
+                    face = None
+                elif self.machine.state == WATCHING:
+                    face = await asyncio.to_thread(recognize.analyze, frame)
                 else:
-                    vector = await asyncio.to_thread(recognize.embed, frame)
+                    # Mid-session: position and presence only, never
+                    # identity (spec section 4A).
+                    face = await asyncio.to_thread(recognize.detect, frame)
 
                 now = time.monotonic()
-                present = vector is not None
-                if self.machine.state == WATCHING and present:
-                    self._recent_vectors.append(vector)
+                present = face is not None
+                if present and self.machine.state == WATCHING \
+                        and face.embedding is not None:
+                    self._recent_vectors.append(face.embedding)
                     self._recent_vectors = self._recent_vectors[-self.samples:]
+
+                # Voice presence (T13.2): the pipeline stamps note_voice()
+                # from another task; fold it into the machine here.
+                if self._voice_at is not None \
+                        and self._voice_at != self._voice_seen:
+                    self._voice_seen = self._voice_at
+                    self.machine.on_voice(self._voice_at)
+                    if not present and self.machine.state == ACTIVE:
+                        self._log_presence("voice")
+                if present:
+                    self._log_presence("face")
+
+                if self.tracker is not None:
+                    await self.tracker.maybe_resync()
+                    if present:
+                        h, w = frame.shape[:2]
+                        self.tracker.observe(face.bbox, w, h, now)
+                    else:
+                        self.tracker.relax(now)
 
                 advice = self.machine.on_face(present, now)
                 if advice == "start":
                     await self.start_session(now)
+                elif advice == "ask":
+                    await self.ask_still_there()
                 elif advice == "end":
                     await self.end_session()
+                elif self.machine.state == WATCHING \
+                        and self.attractor.on_face(present, now):
+                    name = random.choice(ATTRACT_MOVES)
+                    logger.info("attractor: nobody for %.0fs, playing %s",
+                                self.attractor.after_secs, name)
+                    await self._perform(name, LIBRARY[name].seconds)
         finally:
-            camera.close()
+            if self.hub is None:
+                source.close()

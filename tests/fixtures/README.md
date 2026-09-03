@@ -36,3 +36,17 @@ A sample of the T3 store layout from the spec (section 4B): `maria/` is a
 The `embedding` values are placeholder numbers, not real face embeddings —
 T2/T3 tests that care about real embeddings compute their own from
 `faces/`.
+
+## Voices (`voices/<speaker>/*.wav`)
+
+Twenty 16 kHz mono clips for the speaker-verification gate (T13.9):
+five Kokoro v1.0 voices (`af_heart`, `am_adam`, `bf_emma`, `bm_george`,
+`ef_dora` — the last speaking Spanish) × four sentences each, synthesized
+by [voices/make_voices.py](voices/make_voices.py) on 2026-09-02. A
+"speaker" is a Kokoro voice, so same-speaker pairs are one voice saying
+different sentences. Synthetic, deliberately: no licensable human
+recordings are in this repo, and the family's real voice prints never
+will be. They measure whether ECAPA separates these timbres; how a real
+person varies from morning to evening is measured at the robot and
+logged in progress/T13.md. Point `voice/verify_voiceid.py --dir` at a
+folder of real recordings laid out the same way to re-run the gate.

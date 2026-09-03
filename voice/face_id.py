@@ -86,12 +86,18 @@ def identify_from_source(source, store: LearnerStore, *,
 
 
 def capture_embedding(source, *, samples: int = 4,
-                      max_frames: int = 20, fps: float = 4.0):
+                      max_frames: int = 20, fps: float = 4.0, frames=None):
     """The enrollment capture: 3-5 snapshots averaged into one embedding.
-    Returns None if the face never showed up."""
+    Returns None if the face never showed up.
+
+    ``frames`` overrides the source with any iterable of frames -- the
+    FrameHub's generator when another loop already holds the camera
+    (T13.3: a V4L2 device cannot be opened twice)."""
     vectors = []
     seen = 0
-    for frame in Camera(parse_source(source), fps=fps).frames():
+    if frames is None:
+        frames = Camera(parse_source(source), fps=fps).frames()
+    for frame in frames:
         seen += 1
         vector = recognize.embed(frame)
         if vector is not None:

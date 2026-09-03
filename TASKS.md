@@ -51,12 +51,16 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T10 | Session lifecycle | T2, T4, T9 | done | 2026-08-31 |
 | T11 | Faire hardening & dress rehearsal | all | in progress | 2026-09-02 |
 | T12 | Cloud session lifecycle (watch / walk-away / reset over Gemini) | T8, T10 | todo | — |
+| T13 | Family feedback round 1: goals, presence, tracking, showmanship | T11, T12 | in progress | 2026-09-02 |
 
 Parallelizable from the start (after T0): T1, T3, T5, T7 have no
 dependencies on each other. The critical path is
 T0 → T1 → T2 → T9 → T10 → T11. T12 was added after the first
 in-person rehearsal (2026-09-02): the family chose the cloud voice, and
-the booth loop must work over it.
+the booth loop must work over it. T13 collects the rest of that
+rehearsal's feedback (recorded family debrief, same day) as one task of
+nine subtasks; T13.1, T13.4–T13.7 and T13.9 do not touch the session
+loop and may start before T12 lands.
 
 ---
 
@@ -572,3 +576,202 @@ green; `start_booth.sh` can launch cloud mode.
 
 **Progress log.**
 - —
+
+---
+
+## T13 — Family feedback round 1: goals, presence, tracking, showmanship
+
+**Goal.** Everything the family asked for in the recorded debrief after the
+2026-09-02 rehearsal, turned into shippable pieces. The full transcript
+digest and the item-by-item mapping live in
+[progress/T13.md](progress/T13.md); the two items already owned elsewhere
+(the booth mic → T11 item 1; the cloud walk-away loop → T12) are *not*
+repeated here.
+
+**Subtasks.** Ordered by booth value; each has its own tests under
+`tests/t13/` and its own line in the Progress log.
+
+- **T13.1 — Learner goals and an explicit level at enrollment.** The
+  debrief: Italian "started strangely" while French asked the level at
+  once; the tutor must *ask* the level rather than default to beginner,
+  and must know *why* the person is learning ("just conversation" /
+  "exam prep" / "job interview" — the three examples given). Build: a
+  `goal` field in `profile.json` (a short enum — `conversation`, `exam`,
+  `work`, `travel`, `other` — plus a free-text `goal_note`), defaulting
+  so existing profiles load unchanged; `enroll_new_learner` takes both;
+  a `set_learner_goal` tool for changing it later; the stranger briefing
+  becomes a fixed four-question script (name → language → level → goal,
+  one question each, in that order, no lesson before all four); and the
+  learner briefing gets per-goal guidance (exam/work: push richer
+  vocabulary, offer synonyms and register; conversation: keep it flowing,
+  correct less). Tests: store round-trip with and without the new keys;
+  `anthropic`- and `google`-marked `--say` enrollments assert the level
+  question is asked before the first lesson and the goal lands in the
+  profile.
+- **T13.2 — Presence policy the family can predict.** "Nobody could say
+  how long it takes to forget you." Build on T12's loop: speech from the
+  visitor counts as presence (a face-less but talking visitor never
+  times out — the "went for tea, kept talking" case); at ~two-thirds of
+  the walk-away timer the robot asks once, out loud, "Still there?";
+  when the timer expires it says a one-line goodbye *before* saving, so
+  the save is never silent for someone who is actually still there;
+  `BOOTH_ABSENT_SECS` knob in `start_booth.sh`; the timer's state
+  (`presence: face`, `presence: voice`, `presence: asking`,
+  `presence: gone`) in the INFO log. Tests: fake-clock machine tests for
+  the voice-extends-presence and ask-once transitions; the T10/T12
+  no-leak tests still green.
+- **T13.3 — Follow the speaker with head and body.** The robot should
+  keep its face on the person: up, down, left, right, and turn the body
+  when the face leaves the head's comfortable yaw range. Build: a
+  `detect(image) -> bbox | None` in `face/recognize.py` (detection only,
+  largest face, no embedding — cheaper than `embed`); a tracker in the
+  session runner that maps bbox centre → head yaw/pitch (camera FOV
+  from the vendor's `kinematics_data.json` or a measured constant) and
+  streams `goto_posture` at ~2 fps with dead-band and rate limits so it
+  never jitters; body yaw takes over past ±35° of head yaw. **DOF
+  ownership must be written down** (`voice/embodiment.py` docstring
+  already sets the rule): the tracker owns `head_yaw` and `body_yaw`;
+  embodiment keeps antennas and its pitch gestures, so vertical tracking
+  is a slow pitch bias applied only between the embodiment's nods.
+  Tracking pauses during any recorded move (T13.4) and during
+  `reset_pose`. Tests: bbox→angle mapping unit-tested at the frame's
+  centre, edges and corners; a fixture-video run asserts the commanded
+  yaw follows the face's horizontal drift and stays inside limits; a
+  `robot`-marked test moves a printed face across the real camera.
+- **T13.4 — Tricks: dances, emotions, a spin, and an idle attractor.**
+  "It must do the standard Reachy Mini tricks — dance, spin, and so
+  on." The vendor SDK ships recorded-move libraries
+  (`pollen-robotics/reachy-mini-dances-library`,
+  `pollen-robotics/reachy-mini-emotions-library`, HuggingFace datasets,
+  played by the daemon via `play_move`). Build: a `play_move` motion
+  procedure in `reachy_driver.py` / `reachy_target.py` (cancelable,
+  emits `motion_completed`, returns to the previous pose); a `perform`
+  tool listing a curated subset by name (two or three dances, `spin` =
+  a full body-yaw sweep and back, a handful of emotions) so the model
+  can answer "can you dance?"; the datasets pre-fetched in the booth
+  preflight (fail soft with a printed warning — venue internet is a
+  known risk); and an **idle attractor**: with nobody in frame for
+  `BOOTH_ATTRACT_SECS` the robot plays a short dance or antenna flourish
+  every few minutes — the family's "people watch from a distance before
+  they dare to come over" — silenced by any face. Stub robot accepts
+  `play_move` as a timed no-op. Tests: stub-side procedure and event
+  contract; `robot`-marked playback of one dance; attractor timing on
+  the fake clock.
+- **T13.5 — Booth persona: a few lines of character.** The family wants
+  the robot to have a couple of jokes with a mild edge: "I'll remember
+  you" at enrollment success, a mock-dramatic farewell, and "you don't
+  sound like yourself today — suspicious, say something else" once
+  T13.9 exists. **Decision (2026-09-02): no allusions to Skynet,
+  Terminator, or robots-taking-over; keep the edge gentle.** Build: a
+  short `BOOTH_QUIPS`
+  block in `tutor_mode.py` appended to the booth briefing (local and
+  cloud), each quip tied to one moment and used at most once per
+  visitor, in the target language when the learner is intermediate or
+  above. Tests: static (the briefing carries the quips only in booth
+  mode); one `--say` run per speech mode logs an enrollment-success line
+  for a human to read; no LLM-judging.
+- **T13.6 — The wishlist tool.** "If this were a product you bought,
+  what would you want it to do?" A `record_wish` tool that appends the
+  visitor's wish (with date and, if enrolled, first name) to
+  `booth/wishes.md`, gitignored, plus a briefing line inviting the
+  question once per visitor. **Decision (2026-09-02): the poster itself
+  is a physical deliverable and out of scope for the code tasks.**
+  Tests: `record_wish` round-trip; wishes survive the guest wipe.
+*T13.7–T13.9 are nice-to-have (decision 2026-09-02): do them after
+T13.1–T13.6 and T12, in this order, if time allows.*
+
+- **T13.7 — Booth resilience: "the computer froze".** The debrief ended
+  with the machine hanging and nobody knowing why. Build: an agent
+  heartbeat line every 30 s (`alive: state=<idle|active> turns=<n>`); a
+  stuck detector (face present, no bot turn for 3 min → WARNING plus a
+  self-kick of the conversation); `start_booth.sh` restarts the agent
+  if it dies while serve is healthy (bounded retries, logged); and a
+  `booth/postmortem.sh` that snapshots the last 200 lines of each log,
+  `dmesg` tail, memory and GPU state into `booth/postmortems/<ts>/` for
+  the next time it happens. Tests: heartbeat and stuck detection on the
+  fake clock; the restart path with a deliberately killed stub agent.
+- **T13.8 — Code-switched *accent*: measure, mitigate, or document.**
+  "English words inside a Russian sentence come out with a Russian
+  accent." In cloud mode the voice is Gemini's; in local mode span tags
+  already switch engines per span (T6). Build: a `google`-marked probe
+  that synthesizes a fixed set of mixed sentences (EN inside ru/es/fr,
+  ru/es inside EN) over Gemini Live, transcribes with Whisper, and
+  scores span survival like T7; try one prompt-level mitigation
+  ("pronounce embedded English as a native English speaker") and record
+  whether it moves the number. Deliverable is the number plus a demo
+  note in `booth/SIGNAGE.md`'s operator section: which pairs to
+  showcase and which to avoid. No fixed pass bar.
+- **T13.9 — Voice print as a second identity signal (stretch,
+  cut-if-late).** Store a speaker embedding alongside the face
+  embedding; on a later visit, face-known but voice-mismatched →
+  playful challenge (T13.5's line) then fall into the ask band; face
+  unsure but voice-matched → confirm without asking. Measurement-first
+  like T2: pick a speaker-verification model that runs on aarch64
+  (ECAPA/WeSpeaker via ONNX; **verify the execution provider, don't
+  trust the reputation**), record same/different-speaker score
+  distributions on CC0 clips added to `tests/fixtures/` with provenance,
+  and choose thresholds from the numbers. Audio comes from pipecat's
+  input frames in both speech modes; cloud mode still sends audio to
+  Gemini, so the voice embedding is computed locally and never leaves
+  the booth (add that line to Sign 1). Fully cuttable: nothing in
+  T13.1–T13.8 depends on it. **Known-good starting point** (from the
+  user's other project): SpeechBrain ECAPA,
+  `speechbrain/spkrec-ecapa-voxceleb` via `EncoderClassifier` (older
+  builds import from `speechbrain.pretrained`), torch/torchaudio, cosine
+  match threshold 0.65 measured there; prints stay on the machine.
+
+**E2E check.** In person, off `./start_booth.sh` in cloud mode: a new
+visitor is asked level and goal before the first lesson; the head follows
+them as they step left and back; "can you dance?" gets a dance; they
+walk away, hear "still there?", then a goodbye, and their notes mention
+the goal; a second visitor gets an "I'll remember you" on enrollment;
+the attractor fires while nobody is in frame.
+
+**Definition of Done.** T13.1–T13.7 done with tests green and the E2E
+check logged in person; T13.8's numbers recorded; T13.9 either done or
+explicitly cut in the Progress log. Second family test session held
+with the booth mic (T11 item 1) and its debrief filed as
+`progress/T13.md`'s next section.
+
+**Progress log.**
+- 2026-09-02 — task written from the family debrief transcript; digest
+  and mapping in [progress/T13.md](progress/T13.md).
+- 2026-09-02 (later) — **T13.1–T13.6 built and tested on the simulated
+  path** (`tests/run.sh t13`: 33 unmarked + 1 models + 2 live-agent
+  tests green; whole unmarked suite green). T13.1: goal/goal_note in
+  profiles (legacy profiles load), four-question enrollment script,
+  `set_learner_goal`; the interview verified live in both speech modes
+  (level asked before enrolling, goal stored as `work`). T13.2: speech
+  counts as presence, "still there?" at two thirds, spoken goodbye
+  before the save, `presence:` log lines, `BOOTH_ABSENT_SECS`. T13.3:
+  `detect()`/`analyze()`, `FaceTracker` (dead-band, rate cap, ±35°
+  body handoff, pitch via embodiment bias, suspend/resync around
+  deliberate moves), the shared `FrameHub` so the watcher, tracker and
+  enrollment share one camera (a latent T10-on-metal bug), on by default
+  with a camera and robot. T13.4: `moves.py` library, `play_move` on
+  target/stub/driver with cancel, `perform` tool, `spin`/`wiggle` built
+  in, idle `Attractor`, preflight dataset fetch. T13.5: gentle-edge
+  quips only (`--persona booth`). T13.6: `record_wish` → `booth/wishes.md`.
+  Stub-robot E2E: "can you dance for me?" → `perform(dance)` → the
+  robot accepted `play_move` while the tracker ran over the fixture
+  clip. **Not yet on metal**: the in-person E2E check (tracking a real
+  visitor, a dance on the real robot, the still-there/goodbye timing)
+  and the second family session with the mic remain. T13.7–T13.8 not
+  started (nice-to-have). [progress/T13.md](progress/T13.md).
+- 2026-09-02 (evening) — **T13.9 done on the simulated path.**
+  SpeechBrain ECAPA (`speechbrain/spkrec-ecapa-voxceleb`) in
+  `voice/voiceid.py`, on CUDA here (5 ms/clip). Measured gate
+  (`voice/verify_voiceid.py`, 20 synthetic Kokoro clips, 5 voices):
+  same-voice 0.717–0.898, different-voice −0.028–0.391 → accept ≥ 0.60,
+  reject < 0.45, band clean; report in `tests/reports/`. Prints live in
+  `profile.json` (`voice_embedding`), are computed locally in both
+  speech modes, and die with the profile. Policy: face-sure + mismatch
+  → one playful challenge, then "is that you?"; face-unsure + match →
+  confirmed without asking; family profiles without a print learn one.
+  Enrollment stores the interview's voice. Live tests: enrollment stored
+  a print that matches a second clip of the same voice; a seeded face
+  with the wrong voice was challenged in Spanish ("hoy no suenas del
+  todo como tú misma"), then downgraded to the ask band. Sign 1 now
+  discloses the voice signature. **Open**: thresholds are calibrated on
+  synthetic voices only; measure the family's real voices at the next
+  session (the gate takes `--dir`).

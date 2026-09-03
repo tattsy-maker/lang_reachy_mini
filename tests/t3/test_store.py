@@ -30,7 +30,9 @@ def test_create_load_roundtrip(store):
     # profile.json holds exactly the spec's fields
     raw = json.loads((store.root / created.id / "profile.json").read_text())
     assert set(raw) == {"name", "target_language", "level", "embedding",
-                        "sessions", "last_seen", "tier"}
+                        "sessions", "last_seen", "tier",
+                        "goal", "goal_note",       # T13.1
+                        "voice_embedding"}         # T13.9
 
 
 def test_save_updates_profile(store):

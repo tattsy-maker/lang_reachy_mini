@@ -40,7 +40,9 @@ def test_walk_away_ends_after_absence_and_only_then():
     m.session_started(2.0)
     assert m.on_face(False, 30.0) is None            # gone 28s: not yet
     assert m.on_face(True, 40.0) is None             # came back: timer resets
-    assert m.on_face(False, 99.0) is None            # gone 59s
+    assert m.on_face(False, 99.0) == "ask"           # gone 59s: "still there?" (T13.2)
+    m.session_asked()
+    assert m.on_face(False, 99.5) is None            # asked once
     assert m.on_face(False, 100.1) == "end"          # gone 60.1s
     m.session_ended()
     assert m.state == WATCHING

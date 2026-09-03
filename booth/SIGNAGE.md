@@ -14,8 +14,10 @@ spec requirement).
 >
 > - It only remembers you if you **say yes** when it asks.
 > - What it stores: your first name, the language you're practicing,
->   its lesson notes, and a **numeric face signature** — *not* a photo,
->   and it can't be turned back into your picture.
+>   its lesson notes, a **numeric face signature** — *not* a photo,
+>   and it can't be turned back into your picture — and a **numeric
+>   voice signature**, computed on the booth computer, *not* a
+>   recording.
 > - Everything is stored **on the computer at this booth** and every
 >   visitor profile is **deleted at the end of the day**.
 > - Want out sooner? Just tell the robot **"forget me"** — it deletes

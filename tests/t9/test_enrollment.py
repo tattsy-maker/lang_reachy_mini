@@ -95,13 +95,17 @@ def test_face_id_unknown_known_unsure(paths, tmp_path):
 def test_unknown_face_enrolls_by_voice(paths, tmp_path, run_agent_say):
     clip = paths.fixtures / "video" / "sunita_clip.avi"
     root = tmp_path / "learners"
+    # T13.1 made enrollment a four-question interview (name, language,
+    # level, goal), so the scripted visitor answers all four.
     log, found = run_agent_say(
         ["Hello there! I'd love to learn some Spanish.",
-         "Yes please, remember me! My name is Sunita, and Spanish please."],
+         "Yes please, remember me! My name is Sunita, and Spanish please.",
+         "I'm a beginner.",
+         "Just for fun, chatting with friends."],
         wait_for=r"tutor: enrolled new guest",
         extra_args=["--face-source", str(clip),
                     "--learners-root", str(root), "--say-gap", "12"],
-        timeout=300)
+        timeout=360)
     assert found, "enroll_new_learner never fired; log tail:\n" + log[-4000:]
     assert "remember you" in tts_lines(log).lower(), \
         "consent question was never asked aloud"

@@ -54,12 +54,38 @@ class Embodiment(FrameProcessor):
     """Drives the robot from conversation state. Passes all frames through."""
 
     def __init__(self, robot: RobotLink, *, enabled: bool = True,
-                 sway: bool = True) -> None:
+                 sway: bool = True, own_yaw: bool = True) -> None:
         super().__init__()
         self._robot = robot
         self._enabled = enabled
         self._sway_enabled = sway
         self._sway_task: asyncio.Task | None = None
+        # DOF split with the face tracker (T13.3): when a tracker owns
+        # head_yaw/body_yaw, the talking sway leaves yaw alone. Pitch stays
+        # ours; the tracker feeds a slow vertical bias through pitch_bias,
+        # which is added to every pitch we command.
+        self._own_yaw = own_yaw
+        self.pitch_bias = 0.0
+        # True between the person starting to speak and the robot finishing
+        # its reply -- the window in which embodiment is actively writing
+        # pitch, so a tracker should not.
+        self._busy_since: float | None = None
+        # Presence hook (T13.2): the session runner counts the visitor's
+        # speech as presence, so a talker out of frame is never timed out.
+        self.on_user_speech = None
+
+    @property
+    def busy(self) -> bool:
+        if self._busy_since is None:
+            return False
+        # A turn that never got its reply (muted, error) must not pin the
+        # tracker forever.
+        return (asyncio.get_event_loop().time() - self._busy_since) < 20.0
+
+    def _posture(self, duration: float, **dofs: float) -> None:
+        if "head_pitch" in dofs:
+            dofs["head_pitch"] = dofs["head_pitch"] + self.pitch_bias
+        self._robot.posture(duration=duration, **dofs)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -77,18 +103,26 @@ class Embodiment(FrameProcessor):
 
     def _react(self, frame: Frame) -> None:
         if isinstance(frame, UserStartedSpeakingFrame):
+            self._busy_since = asyncio.get_event_loop().time()
+            if self.on_user_speech is not None:
+                try:
+                    self.on_user_speech()
+                except Exception as exc:                      # noqa: BLE001
+                    logger.warning("presence hook failed: %s", exc)
             self._stop_sway()
-            self._robot.posture(duration=0.35, **ATTENTIVE)
+            self._posture(0.35, **ATTENTIVE)
 
         elif isinstance(frame, UserStoppedSpeakingFrame):
-            self._robot.posture(duration=0.3, **THINKING)
+            self._posture(0.3, **THINKING)
 
         elif isinstance(frame, BotStartedSpeakingFrame):
+            self._busy_since = asyncio.get_event_loop().time()
             self._start_sway()
 
         elif isinstance(frame, BotStoppedSpeakingFrame):
             self._stop_sway()
-            self._robot.posture(duration=0.5, **RESTING)
+            self._posture(0.5, **RESTING)
+            self._busy_since = None
 
     # -- talking sway -------------------------------------------------------
 
@@ -111,14 +145,15 @@ class Embodiment(FrameProcessor):
         """
         try:
             while True:
-                self._robot.posture(
-                    duration=0.45,
-                    head_yaw=random.uniform(-0.10, 0.10),
+                dofs = dict(
                     head_pitch=random.uniform(-0.08, 0.04),
                     head_roll=random.uniform(-0.06, 0.06),
                     antenna_left=random.uniform(0.1, 0.7),
                     antenna_right=random.uniform(-0.7, -0.1),
                 )
+                if self._own_yaw:
+                    dofs["head_yaw"] = random.uniform(-0.10, 0.10)
+                self._posture(0.45, **dofs)
                 await asyncio.sleep(random.uniform(0.5, 0.9))
         except asyncio.CancelledError:
             raise

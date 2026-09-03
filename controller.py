@@ -361,6 +361,14 @@ async def cmd_shake(s: _Session, a) -> None:
                               period=a.period))
 
 
+async def cmd_perform(s: _Session, a) -> None:
+    jprint(await s.run_motion("play_move", move=a.name))
+
+
+async def cmd_moves(s: _Session, a) -> None:
+    jprint(await s.call("list_moves"))
+
+
 async def cmd_wake(s: _Session, a) -> None:
     jprint(await s.run_motion("wake_up"))
 
@@ -429,6 +437,7 @@ COMMANDS = {
     "status": cmd_status, "manifest": cmd_manifest, "slots": cmd_slots,
     "pose": cmd_pose, "home": cmd_home, "look": cmd_look,
     "nod": cmd_nod, "shake": cmd_shake, "wake": cmd_wake, "sleep": cmd_sleep,
+    "perform": cmd_perform, "moves": cmd_moves,
     "motors": cmd_motors, "stop": cmd_stop, "clear-estop": cmd_clear_estop,
     "watch": cmd_watch, "demo": cmd_demo,
 }
@@ -505,6 +514,10 @@ def build_parser() -> argparse.ArgumentParser:
     look.add_argument("z", type=float)
     look.add_argument("--duration", type=float, default=1.0)
 
+    perform = sub.add_parser("perform", help="play a curated recorded move "
+                                             "(see 'moves')")
+    perform.add_argument("name")
+    sub.add_parser("moves", help="list the curated recorded moves")
     for name, amp in (("nod", 0.25), ("shake", 0.4)):
         g = sub.add_parser(name, help="%s the head" % name)
         g.add_argument("--times", type=int, default=2)

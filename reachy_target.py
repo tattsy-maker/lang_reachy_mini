@@ -441,6 +441,57 @@ class ReachyMiniTarget:
         with self._lock:
             self._cmd.update(self._measured)
 
+    # --- recorded moves (T13.4) ---------------------------------------------
+
+    def play_move(self, name: str) -> Dict[str, float]:
+        """Play one curated recorded move (moves.LIBRARY) to the end, blocking.
+
+        The vendor's ``play_move`` streams targets straight to the daemon,
+        bypassing the held posture, so the posture is resynced from the
+        measured pose afterwards. Sound is off: the voice agent owns the
+        speaker while a conversation runs. ``cancel_move`` (from another
+        thread) stops playback at the next tick.
+        """
+        from moves import LIBRARY
+        spec = LIBRARY.get(name)
+        if spec is None or spec.dataset is None:
+            raise ValueError("no recorded move %r; recorded ones are %s"
+                             % (name, ", ".join(
+                                 m.name for m in LIBRARY.values()
+                                 if m.dataset)))
+        mini = self._require()
+        move = self._recorded_move(spec.dataset, spec.move)
+        try:
+            mini.play_move(move, sound=False, initial_goto_duration=0.4)
+        finally:
+            self.refresh()
+            with self._lock:
+                self._cmd.update(self._measured)
+        with self._lock:
+            return dict(self._cmd)
+
+    def cancel_move(self) -> None:
+        mini = self._mini
+        if mini is not None:
+            try:
+                mini.cancel_move()
+            except Exception as exc:                        # noqa: BLE001
+                logger.warning("cancel_move failed: %s", exc)
+
+    _move_libraries: Dict[str, object] = {}
+
+    @classmethod
+    def _recorded_move(cls, dataset: str, move: str):
+        """A RecordedMove from the (cached) dataset; libraries are loaded
+        once per process. Raises if the dataset is not on disk and cannot
+        be fetched -- moves.py --preload is the booth's preflight."""
+        from reachy_mini.motion.recorded_move import RecordedMoves
+        lib = cls._move_libraries.get(dataset)
+        if lib is None:
+            lib = RecordedMoves(dataset)
+            cls._move_libraries[dataset] = lib
+        return lib.get(move)
+
     # --- media ownership ---------------------------------------------------
     #
     # The daemon grabs the robot's camera, mic and speaker at startup. A voice

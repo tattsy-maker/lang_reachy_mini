@@ -23,7 +23,8 @@ _REPO = os.path.dirname(_HERE)
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
-from tutor.store import Learner, LearnerStore, LEVELS  # noqa: E402
+from tutor.store import GOALS, Learner, LearnerStore, LEVELS  # noqa: E402
+from tutor.wishes import DEFAULT_WISHES_FILE, record_wish as _record_wish  # noqa: E402
 
 logger = logging.getLogger("tutor_mode")
 
@@ -69,12 +70,38 @@ _LEVEL_GUIDANCE = {
         "welcome, natural pace. Use English only as a last resort."),
 }
 
+# Why the student is learning (T13.1). The family: "one wants only
+# conversation, another is preparing for an exam, a third for a job
+# interview -- it should behave differently for each."
+_GOAL_GUIDANCE = {
+    "conversation": (
+        "{name} wants to be able to hold everyday conversations. Keep the "
+        "talk flowing, correct only what blocks understanding, and favour "
+        "useful phrases over rules."),
+    "exam": (
+        "{name} is preparing for an exam. Be exact: correct every error, "
+        "offer richer vocabulary and synonyms, name the grammar point in "
+        "one sentence, and vary the register."),
+    "work": (
+        "{name} needs {language} for work, such as interviews and meetings. "
+        "Practise formal register and professional vocabulary, offer more "
+        "sophisticated alternatives to what they said, and rehearse "
+        "typical workplace exchanges."),
+    "travel": (
+        "{name} is learning for travel. Drill the practical situations -- "
+        "directions, ordering, shopping, small talk -- and prize being "
+        "understood over being perfect."),
+    "other": (
+        "{name}'s own goal is described below; tailor the lesson to it."),
+}
+
 _BRIEFING = """
 
 You are in tutor mode. You are a friendly, patient language tutor, and this \
 is a lesson.
 
 Your student is {name}: {level} {language}, {session_line}
+Their goal: {goal_guidance}{goal_note}
 
 Tutoring rules. Where they conflict with the general language rule above, \
 these win:
@@ -111,6 +138,23 @@ that their file is deleted on the spot.
 
 {notes_section}"""
 
+# The enrollment interview (T13.1). The family watched Italian "start
+# strangely" while French asked the level at once: the questions are now
+# a fixed script, one at a time, and the lesson waits for all four.
+ENROLLMENT_SCRIPT = """\
+Enrollment is four short questions, asked ONE AT A TIME in this order, \
+each in its own turn, waiting for the answer before the next. No lesson, \
+no teaching, no foreign words until all four are answered:
+  1. their name;
+  2. which language they want to practice ({languages});
+  3. their level in it: beginner, intermediate or advanced (ask this \
+explicitly, in those words, never assume);
+  4. why they are learning: just conversation, an exam, work or interviews, \
+travel, or something else (one short question, their own words are fine).
+Then call enroll_new_learner with all four (name, target_language, level, \
+goal, and their own words as goal_note). When it succeeds, greet them by \
+name and start a short first lesson pitched at the level and goal they gave."""
+
 # Briefing when a face is present but matches nobody in the store (T9).
 STRANGER_BRIEFING = """
 
@@ -121,15 +165,13 @@ you. You are a friendly language tutor in a small robot body.
 - If they would like a lesson, first ask, in these words or close to them: \
 "Would you like me to remember you for the rest of the day?" You need a \
 clear yes before anything about them is stored.
-- If they agree, ask their name and which language they want to practice \
-({languages}), then call enroll_new_learner. When it succeeds, greet them \
-by name and start a short first lesson, beginner level unless they say \
-otherwise.
+- If they agree, run the enrollment interview below.
 - If they decline, that is completely fine. Chat normally, store nothing, \
 and do not ask again.
 - If they were enrolled and say goodbye, call save_session_notes as usual. \
 If they ask to be forgotten, call forget_me and confirm out loud.
-"""
+
+""" + ENROLLMENT_SCRIPT + "\n"
 
 # Briefing when the best face match lands in the ask-don't-guess band.
 UNSURE_BRIEFING = """
@@ -145,9 +187,42 @@ lesson history yet.
 what it returns.
 - If they say no, apologize lightly, then treat them as someone new: offer \
 a lesson, ask "Would you like me to remember you for the rest of the \
-day?", and on a clear yes ask their name and language and call \
-enroll_new_learner. If they decline, chat normally and store nothing.
+day?", and on a clear yes run the enrollment interview below. If they \
+decline, chat normally and store nothing.
+
+""" + ENROLLMENT_SCRIPT.replace("{languages}", "any language you can teach") + "\n"
+# (UNSURE_BRIEFING is formatted with name= only, so the interview's
+# language roster is spelled out in words here rather than substituted.)
+
+# Booth persona (T13.5). The family wanted "a couple of jokes with a
+# little edge"; the decision on 2026-09-02 was no Skynet/Terminator/robot
+# uprising allusions and no movie lines -- gentle edge only. Also carries
+# the wishlist question (T13.6). Appended only with --persona booth.
+BOOTH_PERSONA = """
+
+Booth persona. You are the demo at a Maker Faire booth, so you have a \
+little character, used sparingly: at most one quip per moment, each at \
+most once per visitor, never at the expense of a learner's mistake, and \
+never interrupting a lesson. Say a quip in the lesson language when the \
+student is intermediate or advanced, otherwise in English. Keep the edge \
+gentle: nothing about robots taking over, no threats, no movie quotes.
+- When enrollment succeeds: "I will remember you. Until closing time, anyway."
+- When they say goodbye: "Go and practice. I will know if you did not."
+- When you have misheard twice in a row: "My ears were the cheapest part \
+of me. Once more?"
+- Once per visitor, near the end of the conversation, ask: "If this were a \
+product you had bought, what would you want it to do?" Then call \
+record_wish with their answer in their own words, and thank them.
 """
+
+PERSONAS = {"plain": "", "booth": BOOTH_PERSONA}
+
+
+def build_persona(kind: str) -> str:
+    """The persona addendum for --persona; "" for plain."""
+    if kind not in PERSONAS:
+        raise ValueError(f"unknown persona {kind!r}; choose from {list(PERSONAS)}")
+    return PERSONAS[kind]
 
 
 def language_name(code: str) -> str:
@@ -178,14 +253,41 @@ def build_briefing(learner: Learner, notes: str) -> str:
                          f"{language}, what they would like to practice.")
     guidance = _LEVEL_GUIDANCE.get(learner.level,
                                    _LEVEL_GUIDANCE["intermediate"])
+    goal = getattr(learner, "goal", "conversation")
+    goal_guidance = _GOAL_GUIDANCE.get(goal, _GOAL_GUIDANCE["other"])
+    goal_note = getattr(learner, "goal_note", "") or ""
+    goal_note = (f' In their words: "{goal_note.strip()}".'
+                 if goal_note.strip() else "")
     return _BRIEFING.format(
         name=learner.name,
         level=learner.level,
         language=language,
         session_line=session_line,
         level_guidance=guidance.format(language=language),
+        goal_guidance=goal_guidance.format(name=learner.name,
+                                           language=language),
+        goal_note=goal_note,
         notes_section=notes_section,
     )
+
+
+def normalize_goal(value: str) -> str:
+    """Free text ('job interviews', 'just chatting') -> one of GOALS."""
+    text = str(value or "").strip().lower()
+    if text in GOALS:
+        return text
+    hints = (("conversation", ("convers", "chat", "talk", "speak", "fun",
+                               "family", "friend")),
+             ("exam", ("exam", "test", "certif", "school", "class", "dele",
+                       "delf", "hsk", "toefl", "ielts", "grade")),
+             ("work", ("work", "job", "interview", "career", "business",
+                       "meeting", "professional", "office", "client")),
+             ("travel", ("travel", "trip", "holiday", "vacation", "visit",
+                         "abroad", "tourist")))
+    for goal, keys in hints:
+        if any(k in text for k in keys):
+            return goal
+    return "other"
 
 
 def load_learner(root: str, name_or_id: str) -> tuple[Learner, str, LearnerStore]:
@@ -243,11 +345,46 @@ def normalize_language(value: str) -> str | None:
     return None
 
 
-def build_tutor_tools(store: LearnerStore, holder: CurrentLearner) -> list:
+# Spoken follow-ups to the voice-print policy (T13.9, voiceid.VoiceIdentity).
+# The challenge is the family's "you don't sound like yourself today"
+# moment -- playful, never accusing.
+def voice_cue(action: str, learner: Learner | None, store: LearnerStore
+              ) -> str | None:
+    """The user-turn cue to inject after a voice-identity action."""
+    if learner is None:
+        return None
+    name = learner.name
+    if action == "challenge":
+        return (f"(Identity check: you recognized {name} by face, but the "
+                f"voice you are hearing does not match {name}'s stored voice "
+                "print. Say, lightly and playfully, that they do not sound "
+                "quite like themselves today, and ask them to say a little "
+                "more. One warm sentence, no accusation, then wait.)")
+    if action == "downgrade":
+        return (f"(Their voice still does not match {name}'s. You are no "
+                f"longer sure who this is. Ask plainly: \"{name}, is that "
+                "you?\" If they say yes, call confirm_identity and carry on. "
+                "If they say no, apologize lightly and treat them as someone "
+                "new: offer a lesson and run the enrollment interview.)")
+    if action == "confirmed":
+        notes = store.read_notes(learner.id, max_sessions=BRIEFING_SESSIONS)
+        language = language_name(learner.target_language)
+        return (f"(Voice check: this is {name}. Their voice matches the print "
+                f"on file, so do not ask. Greet {name} by name in {language} "
+                "and continue as their tutor, picking up where the notes "
+                f"leave off. Profile: {learner.level} {language}, "
+                f"{learner.sessions} past sessions.)\n\nRecent notes:\n"
+                + (notes.strip() or "none yet"))
+    return None
+
+
+def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
+                      wishes_path=None) -> list:
     """The memory tools, same FunctionSchema style as the motion tools."""
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
     saved_ids = holder.saved_ids
+    wishes_path = wishes_path or DEFAULT_WISHES_FILE
 
     async def save_session_notes(params):
         learner = holder.learner
@@ -323,6 +460,43 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner) -> list:
             {"target_language": language_name(language), "was": old_code,
              "note": "continue the lesson in the new language"})
 
+    async def set_learner_goal(params):
+        learner = holder.learner
+        if learner is None:
+            await params.result_callback({"error": "no learner identified"})
+            return
+        goal = normalize_goal(str(params.arguments.get("goal", "")))
+        note = str(params.arguments.get("goal_note", "")).strip()
+        current = store.load(learner.id)
+        if current is None:
+            await params.result_callback({"error": "learner vanished"})
+            return
+        old = current.goal
+        current.goal = goal
+        if note:
+            current.goal_note = note
+        store.save(current)
+        learner.goal = goal
+        learner.goal_note = current.goal_note
+        logger.info("tutor: goal for %s changed %s -> %s (%s)",
+                    learner.id, old, goal, note or "-")
+        await params.result_callback(
+            {"goal": goal, "was": old, "goal_note": current.goal_note,
+             "note": "adapt the rest of the lesson to this goal"})
+
+    async def record_wish(params):
+        text = str(params.arguments.get("wish", "")).strip()
+        if not text:
+            await params.result_callback({"error": "the wish was empty"})
+            return
+        name = holder.learner.name if holder.learner else None
+        path = await asyncio.to_thread(_record_wish, text, name=name,
+                                       path=wishes_path)
+        logger.info("booth: wish recorded (%s): %s", name or "anonymous", text)
+        await params.result_callback(
+            {"recorded": True, "file": os.path.basename(str(path)),
+             "note": "thank them briefly; do not ask for another"})
+
     async def forget_me(params):
         learner = holder.learner
         if learner is None:
@@ -387,15 +561,44 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner) -> list:
             required=["level"],
             handler=update_learner_level,
         ),
+        FunctionSchema(
+            name="set_learner_goal",
+            description="Record or change why the student is learning, when "
+                        "they tell you: conversation, exam, work (jobs, "
+                        "interviews), travel, or other. Adapts how you "
+                        "teach them from now on.",
+            properties={"goal": {"type": "string", "enum": list(GOALS),
+                                 "description": "the category"},
+                        "goal_note": {"type": "string",
+                                      "description": "their goal in their "
+                                                     "own words"}},
+            required=["goal"],
+            handler=set_learner_goal,
+        ),
+        FunctionSchema(
+            name="record_wish",
+            description="Log what a visitor says they would want this "
+                        "product to do, in their own words. Call once per "
+                        "visitor, right after they answer the wish question.",
+            properties={"wish": {"type": "string",
+                                 "description": "their answer, verbatim"}},
+            required=["wish"],
+            handler=record_wish,
+        ),
     ]
 
 
 def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
-                           face_source) -> list:
+                           face_source, frames_factory=None,
+                           voice_identity=None) -> list:
     """enroll_new_learner and confirm_identity, registered alongside the
     memory tools whenever the agent has a face source. confirm_identity
     resolves ``holder.candidate`` — the unsure face match set at startup
-    (T9) or by the session runner (T10)."""
+    (T9) or by the session runner (T10).
+
+    ``frames_factory`` (T13.3), when given, returns an iterable of frames
+    from the shared camera hub instead of reopening ``face_source`` -- a
+    V4L2 device cannot be streamed twice."""
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
     async def enroll_new_learner(params):
@@ -421,24 +624,35 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
         level = str(a.get("level", "beginner")).strip().lower()
         if level not in LEVELS:
             level = "beginner"
+        goal = normalize_goal(str(a.get("goal", "conversation")))
+        goal_note = str(a.get("goal_note", "")).strip()
 
         from face_id import capture_embedding
-        vector = await asyncio.to_thread(capture_embedding, face_source)
+        frames = frames_factory() if frames_factory is not None else None
+        vector = await asyncio.to_thread(capture_embedding, face_source,
+                                         frames=frames)
         if vector is None:
             await params.result_callback(
                 {"error": "no face visible right now; ask them to look at "
                           "you and try once more"})
             return
+        # The interview itself is the voice enrollment (T13.9): four
+        # answers is plenty of speech for a print, if the collector heard it.
+        voice_print = (voice_identity.print_list()
+                       if voice_identity is not None else None)
         learner = store.create(name, language, level=level, tier="guest",
-                               embedding=[float(x) for x in vector])
+                               embedding=[float(x) for x in vector],
+                               goal=goal, goal_note=goal_note,
+                               voice_embedding=voice_print)
         holder.learner = learner
-        logger.info("tutor: enrolled new guest %s (%s, %s)",
-                    learner.id, language, level)
+        logger.info("tutor: enrolled new guest %s (%s, %s, goal %s%s)",
+                    learner.id, language, level, goal,
+                    ", with voice print" if voice_print else "")
         await params.result_callback(
             {"enrolled": True, "name": learner.name, "id": learner.id,
-             "target_language": language, "level": level,
+             "target_language": language, "level": level, "goal": goal,
              "note": "you are now their tutor; greet them by name and "
-                     "begin a short first lesson"})
+                     "begin a short first lesson at this level and goal"})
 
     async def confirm_identity(params):
         candidate = holder.candidate
@@ -468,8 +682,9 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
             description="Create a guest learner profile and capture their "
                         "face so they are remembered for the rest of the "
                         "day. Only after they clearly said yes to being "
-                        "remembered, and only once you know their name and "
-                        "chosen language.",
+                        "remembered, and only once all four enrollment "
+                        "questions (name, language, level, goal) are "
+                        "answered.",
             properties={
                 "name": {"type": "string",
                          "description": "their name, as they said it"},
@@ -478,10 +693,13 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
                     "description": "language to practice, e.g. 'Spanish' "
                                    "or 'es'"},
                 "level": {"type": "string", "enum": list(LEVELS),
-                          "description": "their level if stated; default "
-                                         "beginner"},
+                          "description": "the level they stated when asked"},
+                "goal": {"type": "string", "enum": list(GOALS),
+                         "description": "why they are learning"},
+                "goal_note": {"type": "string",
+                              "description": "their goal in their own words"},
             },
-            required=["name", "target_language"],
+            required=["name", "target_language", "level", "goal"],
             handler=enroll_new_learner,
         ),
     ]
