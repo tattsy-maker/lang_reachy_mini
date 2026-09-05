@@ -54,6 +54,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T13 | Family feedback round 1: goals, presence, tracking, showmanship | T11, T12 | in progress | 2026-09-02 |
 | T14 | Family feedback round 2: sight, calm tracking, one visitor at a time, longer dances | T13 | in progress | 2026-09-03 |
 | T15 | Family feedback round 3: identity for the whole session, one greeting, honest lag | T14 | in progress | 2026-09-04 |
+| T16 | Any native language: taught in your own language, English as a target | T13 | done | 2026-09-04 |
 
 Parallelizable from the start (after T0): T1, T3, T5, T7 have no
 dependencies on each other. The critical path is
@@ -1012,3 +1013,56 @@ per walk-up, and `turn:` lines in the log.
   live with the booth up: a servo limit cycle left behind by the dance,
   not a command; fixed by settling the base after every recorded move.
 
+## T16 — Any native language: taught in your own language, English as a target
+
+**Goal.** Until now English was baked in as the language of explanation:
+the level guidance said "explain in English", tasks were set in English,
+a stranger was greeted in English, the "is that you?" question was
+English, and Whisper priming assumed English was one half of every
+lesson. The family's own debrief is in Russian; a Russian speaker who
+wants to learn English had no valid profile. Notes and design in
+[progress/T16.md](progress/T16.md).
+
+**Subtasks.**
+- **T16.1 — `native_language` in the profile.** A new optional key in
+  `profile.json` (default `en`, so every earlier profile and both
+  fixtures load unchanged); `LearnerStore.create(..., native_language=)`.
+  Test: round trip, legacy load, `None` degrades to `en`.
+- **T16.2 — The briefing explains in the native language.** Every
+  "English" in `_LEVEL_GUIDANCE`, the tutoring rules and the T15.4
+  task-setting rule became `{native}`; a new line names the student's
+  own language; the confirm-first briefing, the voice-check cues and the
+  booth quips follow it. `build_unsure_briefing(learner)` replaces the
+  bare `UNSURE_BRIEFING.format(name=)` at both call sites. Tests: the
+  Russian-native/English-target briefing, the English default unchanged,
+  native == target does not break formatting, cues.
+- **T16.3 — Enrollment and tools.** The interview says English is a fine
+  answer, asks which language to explain in when the visitor chose
+  English or has been speaking something other than English, and asks
+  in the language the visitor used; `enroll_new_learner` takes
+  `native_language`; a `set_native_language` tool changes it
+  mid-session and `confirm_identity` reports it. Tests: tool + field
+  (voice venv), prompt needles.
+- **T16.4 — Speech.** `bilingual_priming(target, native)` works on the
+  pair (a ru speaker learning en gets the measured ru prompt; an
+  unmeasured pair such as ru+es gets none). Local mode: the voice for
+  untagged text follows `--native-language`, else the `--learner`
+  profile, else `en`, so a Russian tutor speaks Russian through Piper
+  and tags `[en]` practice phrases; `BOOTH_NATIVE_LANGUAGE` threads it
+  through the booth script. Cloud mode (the booth default) needs
+  nothing: Gemini speaks every language in one voice and reads the
+  native language from each profile. Test: priming symmetry.
+
+**Known limit.** In local session mode the untagged voice is one
+language per launch (`--native-language`); per-visitor voice switching
+would need a TTS settings push at session start. Cloud mode has no such
+limit, and it is what the booth runs.
+
+**Definition of Done.** `tests/run.sh t16` green (10 in the voice venv,
+8 + 2 skips in the light venv); a booth run where a Russian speaker
+enrolls to learn English and hears Russian explanations.
+
+**Progress log.**
+- 2026-09-04 (night) — **T16.1–T16.4** built and green on the simulated
+  path; the whole unmarked suite still passes. Open: the first live
+  Russian-native session.

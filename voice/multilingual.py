@@ -170,13 +170,27 @@ PRIMING = {
 PRIMING_HELPS = {"es", "ru"}
 
 
-def bilingual_priming(code: str) -> str | None:
-    """The Whisper initial prompt for an English+<code> lesson, or None
-    for pairs where priming measurably hurts (see PRIMING_HELPS)."""
-    code = str(code).lower()
-    if code not in PRIMING_HELPS:
+def bilingual_priming(code: str, native: str = "en") -> str | None:
+    """The Whisper initial prompt for a <native>+<code> lesson, or None
+    for pairs where priming measurably hurts (see PRIMING_HELPS).
+
+    T16: the pair is (native, target) rather than (English, target). The
+    prompts are all English+X, so a Russian speaker learning English gets
+    the same ru prompt as an English speaker learning Russian; a pair
+    with no English in it (Russian speaker, Spanish lessons) is unmeasured
+    and gets no priming."""
+    code, native = str(code).lower(), str(native or "en").lower()
+    if code == native:
         return None
-    return PRIMING.get(code)
+    if native == "en":
+        other = code
+    elif code == "en":
+        other = native
+    else:
+        return None
+    if other not in PRIMING_HELPS:
+        return None
+    return PRIMING.get(other)
 
 
 class MultilingualWhisperMLX(WhisperSTTServiceMLX):

@@ -32,7 +32,8 @@ def test_create_load_roundtrip(store):
     assert set(raw) == {"name", "target_language", "level", "embedding",
                         "sessions", "last_seen", "tier",
                         "goal", "goal_note",       # T13.1
-                        "voice_embedding"}         # T13.9
+                        "voice_embedding",         # T13.9
+                        "native_language"}         # T16
 
 
 def test_save_updates_profile(store):

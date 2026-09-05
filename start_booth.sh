@@ -24,6 +24,10 @@
 #                       dance every few minutes (default 120; 0 = off)
 #   BOOTH_PERSONA       booth (default: gentle quips + wishlist question)
 #                       or plain
+#   BOOTH_NATIVE_LANGUAGE  local speech only: the language the robot
+#                       explains in by default (the voice for untagged
+#                       text), e.g. ru; unset = en. Cloud mode reads each
+#                       learner's own language from their profile.
 #   BOOTH_EXTRA_AGENT   extra flags appended to the agent command
 #
 # Startup takes ~40s (robot connect ~15s, model warmup ~10s) -- start it
@@ -40,6 +44,7 @@ FACE_SOURCE="${BOOTH_FACE_SOURCE:-0}"
 ABSENT_SECS="${BOOTH_ABSENT_SECS:-60}"
 ATTRACT_SECS="${BOOTH_ATTRACT_SECS:-120}"
 PERSONA="${BOOTH_PERSONA:-booth}"
+NATIVE_LANGUAGE="${BOOTH_NATIVE_LANGUAGE:-}"
 ZENOH_LISTEN="tcp/0.0.0.0:7447"
 BROKER="zenoh://127.0.0.1:7447"
 SERVE_LOG="serve.log"
@@ -134,6 +139,8 @@ say "-- starting voice agent (speech $SPEECH$( [ "$SPEECH" = local ] && echo ", 
 say "   warmup is ~40s cold, seconds when the daemon is warm"
 MODEL_FLAGS=(--speech "$SPEECH")
 [ "$SPEECH" = local ] && MODEL_FLAGS+=(--model "$MODEL")
+[ "$SPEECH" = local ] && [ -n "$NATIVE_LANGUAGE" ] \
+    && MODEL_FLAGS+=(--native-language "$NATIVE_LANGUAGE")
 # Directly exec python (no subshell): the shutdown trap must SIGINT the
 # real agent process, not a wrapper that would swallow the signal.
 voice/.venv/bin/python voice/agent.py \

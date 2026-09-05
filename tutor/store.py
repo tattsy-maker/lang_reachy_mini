@@ -38,6 +38,13 @@ is the learner's own words. Both are optional on disk -- a profile written
 before T13 loads with ``goal="conversation"`` and an empty note. So is
 ``voice_embedding`` (T13.9): the speaker print, kept next to the face
 signature and deleted with it.
+
+``native_language`` (T16) is the language the learner is taught *in* --
+explanations, task setting, the greeting to a stranger. It defaults to
+``"en"`` so every profile written before T16 loads unchanged, and it is
+what makes "a Russian speaker learning English" a valid profile: the pair
+(native, target) replaces the old assumption that English is always one
+half of the lesson.
 """
 
 from __future__ import annotations
@@ -58,12 +65,13 @@ TIERS = ("family", "guest")
 GOALS = ("conversation", "exam", "work", "travel", "other")
 PROFILE_KEYS = ("name", "target_language", "level", "embedding",
                 "sessions", "last_seen", "tier", "goal", "goal_note",
-                "voice_embedding")
+                "voice_embedding", "native_language")
 # Keys a pre-T13 profile.json may lack, with the value they load as.
 # ``voice_embedding`` (T13.9) is the ECAPA speaker print, 192 floats, or
 # None until the tutor has heard enough of the learner to keep one.
+# ``native_language`` (T16): the language explanations are given in.
 OPTIONAL_KEYS = {"goal": "conversation", "goal_note": "",
-                 "voice_embedding": None}
+                 "voice_embedding": None, "native_language": "en"}
 
 _NOTES_HEADER = "# {name} — session notes\n"
 _ENTRY_RX = re.compile(r"^## \d{4}-\d{2}-\d{2}", re.M)
@@ -94,6 +102,7 @@ class Learner:
     goal: str = "conversation"
     goal_note: str = ""
     voice_embedding: list[float] | None = None
+    native_language: str = "en"
 
     def profile_dict(self) -> dict:
         return {key: getattr(self, key) for key in PROFILE_KEYS}
@@ -120,7 +129,8 @@ class LearnerStore:
                level: str = "beginner", tier: str = "guest",
                embedding: list[float] | None = None,
                goal: str = "conversation", goal_note: str = "",
-               voice_embedding: list[float] | None = None) -> Learner:
+               voice_embedding: list[float] | None = None,
+               native_language: str = "en") -> Learner:
         """New learner folder; the id disambiguates on name collision."""
         if level not in LEVELS:
             raise ValueError(f"level must be one of {LEVELS}, got {level!r}")
@@ -139,7 +149,9 @@ class LearnerStore:
                           tier=tier, goal=goal,
                           goal_note=str(goal_note or "").strip(),
                           voice_embedding=(list(voice_embedding)
-                                           if voice_embedding else None))
+                                           if voice_embedding else None),
+                          native_language=(str(native_language or "en")
+                                           .strip().lower() or "en"))
         self._folder(learner_id).mkdir(parents=True)
         self.save(learner)
         self._notes_path(learner_id).write_text(
@@ -165,6 +177,8 @@ class LearnerStore:
                 fields[key] = data.get(key, default)
             if fields["goal"] not in GOALS:
                 fields["goal"] = "other"
+            fields["native_language"] = (
+                str(fields["native_language"] or "en").strip().lower() or "en")
             return Learner(id=learner_id, **fields)
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
             logger.warning("skipping corrupt profile %s (%s) — "

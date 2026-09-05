@@ -356,8 +356,8 @@ class SessionRunner:
         recognition pass) → the right system-prompt addendum."""
         from face import recognize
         from tutor_mode import (
-            BRIEFING_SESSIONS, STRANGER_BRIEFING, UNSURE_BRIEFING,
-            build_briefing,
+            BRIEFING_SESSIONS, STRANGER_BRIEFING, build_briefing,
+            build_unsure_briefing,
         )
         known = {l.id: l.embedding for l in self.store.list()
                  if l.embedding and len(l.embedding) == len(face_vector)}
@@ -379,17 +379,19 @@ class SessionRunner:
         logger.info("session: unsure about %s (score %.3f) -> will ask",
                     learner.id, found.score)
         self.holder.candidate = learner
-        return UNSURE_BRIEFING.format(name=learner.name)
+        return build_unsure_briefing(learner)
 
     def _prime_stt(self, learner) -> None:
         if self.stt is None:
             return
         from multilingual import bilingual_priming
-        prompt = bilingual_priming(learner.target_language)
+        from tutor_mode import language_name, native_language_of
+        native = native_language_of(learner)
+        prompt = bilingual_priming(learner.target_language, native)
         if prompt and hasattr(self.stt, "initial_prompt"):
             self.stt.initial_prompt = prompt
-            logger.info("session: whisper priming English + %s",
-                        learner.target_language)
+            logger.info("session: whisper priming %s + %s",
+                        language_name(native), learner.target_language)
 
     async def start_session(self, now: float) -> None:
         from face import recognize

@@ -56,18 +56,21 @@ DEFAULT_LEARNERS_ROOT = os.path.join(_REPO, "learners")
 # the briefing must not blow the ~2.7s booth turn budget).
 BRIEFING_SESSIONS = 3
 
+# ``{native}`` (T16) is the language the student is taught *in*: their
+# own language, English by default. A Russian speaker learning English
+# gets Russian explanations and English practice.
 _LEVEL_GUIDANCE = {
     "beginner": (
         "The student is a beginner. Use short, simple {language} phrases, "
-        "spoken plainly, and give a brief English explanation alongside "
+        "spoken plainly, and give a brief {native} explanation alongside "
         "anything new. Celebrate small wins."),
     "intermediate": (
         "The student is intermediate. Speak mostly {language} at a "
-        "comfortable everyday level. Explain in English only when the "
+        "comfortable everyday level. Explain in {native} only when the "
         "student is genuinely stuck."),
     "advanced": (
         "The student is advanced. Stay in {language} the whole time, idioms "
-        "welcome, natural pace. Use English only as a last resort."),
+        "welcome, natural pace. Use {native} only as a last resort."),
 }
 
 # Why the student is learning (T13.1). The family: "one wants only
@@ -101,17 +104,21 @@ You are in tutor mode. You are a friendly, patient language tutor, and this \
 is a lesson.
 
 Your student is {name}: {level} {language}, {session_line}
+Their own language is {native}: every explanation, instruction and aside \
+is in {native}, never in any other language, and {language} is what they \
+practise.
 Their goal: {goal_guidance}{goal_note}
 
 Tutoring rules. Where they conflict with the general language rule above, \
 these win:
 
 - Teach in {language}. The target language comes from {name}'s profile, not \
-from what you hear: if {name} asks something in English, answer it, then \
+from what you hear: if {name} asks something in {native}, answer it, then \
 steer back into {language}. A stray word in another language does not change \
 the lesson. But if {name} clearly asks to practice a different language, that \
 is allowed and welcome: switch at once and call set_target_language so it is \
-remembered.
+remembered. If they ask to be taught in a different language, call \
+set_native_language.
 - {level_guidance}
 - Setting a task: say what to express in {task_language} and have {name} \
 say it in {language} ("How would you ask for a room for two?"), so the \
@@ -121,10 +128,10 @@ play the other side (a hotel desk, a cafe, a shop), one exchange at a time.
 - Correct every mistake, briefly and kindly. Give the right form, let the \
 lesson move on. Never let an error slide, and never lecture about grammar \
 for more than one sentence.
-- The transcripts you receive can garble {language} words embedded in an \
-English sentence (the recognizer commits to one language at a time). If a \
-phrase looks mangled but context makes clear what a {language} learner was \
-trying to say, repair it silently and answer that. Only ask them to repeat \
+- The transcripts you receive can garble {language} words embedded in a \
+{native} sentence (the recognizer commits to one language at a time). If a \
+phrase looks mangled but context makes clear what a learner of {language} \
+was trying to say, repair it silently and answer that. Only ask them to repeat \
 when the meaning is genuinely unrecoverable — and never scold pronunciation \
 based on a garbled transcript.
 - Nod for right answers. Shake your head gently for wrong ones.
@@ -155,14 +162,21 @@ Enrollment is four short questions, asked ONE AT A TIME in this order, \
 each in its own turn, waiting for the answer before the next. No lesson, \
 no teaching, no foreign words until all four are answered:
   1. their name;
-  2. which language they want to practice ({languages});
+  2. which language they want to practice ({languages}). English is a \
+fine answer from someone whose own language is different. If they choose \
+English, or they have been speaking to you in a language other than \
+English, also ask which language you should explain things in (their own \
+language); otherwise assume English;
   3. their level in it: beginner, intermediate or advanced (ask this \
 explicitly, in those words, never assume);
   4. why they are learning: just conversation, an exam, work or interviews, \
 travel, or something else (one short question, their own words are fine).
-Then call enroll_new_learner with all four (name, target_language, level, \
-goal, and their own words as goal_note). When it succeeds, greet them by \
-name and start a short first lesson pitched at the level and goal they gave."""
+Ask each question in the language they have been speaking to you in. Then \
+call enroll_new_learner with all four (name, target_language, level, goal, \
+and their own words as goal_note), plus native_language when it is not \
+English. When it succeeds, greet them by name and start a short first \
+lesson pitched at the level and goal they gave, explaining in their own \
+language."""
 
 # Briefing when a face is present but matches nobody in the store (T9).
 STRANGER_BRIEFING = """
@@ -170,7 +184,9 @@ STRANGER_BRIEFING = """
 You are in tutor mode, but you do not recognize the person in front of \
 you. You are a friendly language tutor in a small robot body.
 
-- Greet them warmly in English and introduce yourself as a language tutor.
+- Greet them warmly in English and introduce yourself as a language tutor. \
+If they answer in another language you speak, carry on in that language: \
+it is probably their own, and they may want to learn English.
 - If they would like a lesson, first ask, in these words or close to them: \
 "Would you like me to remember you for the rest of the day?" You need a \
 clear yes before anything about them is stored.
@@ -191,7 +207,7 @@ asking.
 
 - Do NOT use their name as if you were sure, and do not mention their \
 lesson history yet.
-- Open in English by asking, warmly: "{name}, is that you?"
+- Open in {native} by asking, warmly: "{name}, is that you?"
 - If they confirm, call confirm_identity and continue as their tutor using \
 what it returns.
 - If they say no, apologize lightly, then treat them as someone new: offer \
@@ -200,8 +216,17 @@ day?", and on a clear yes run the enrollment interview below. If they \
 decline, chat normally and store nothing.
 
 """ + ENROLLMENT_SCRIPT.replace("{languages}", "any language you can teach") + "\n"
-# (UNSURE_BRIEFING is formatted with name= only, so the interview's
-# language roster is spelled out in words here rather than substituted.)
+# (UNSURE_BRIEFING is formatted with name= and native= only, so the
+# interview's language roster is spelled out in words here rather than
+# substituted.)
+
+
+def build_unsure_briefing(learner: Learner) -> str:
+    """The confirm-first briefing for an unsure face match: the question
+    is asked in the candidate's own language (T16)."""
+    return UNSURE_BRIEFING.format(
+        name=learner.name,
+        native=language_name(getattr(learner, "native_language", "en")))
 
 # Booth persona (T13.5). The family wanted "a couple of jokes with a
 # little edge"; the decision on 2026-09-02 was no Skynet/Terminator/robot
@@ -213,7 +238,7 @@ Booth persona. You are the demo at a Maker Faire booth, so you have a \
 little character, used sparingly: at most one quip per moment, each at \
 most once per visitor, never at the expense of a learner's mistake, and \
 never interrupting a lesson. Say a quip in the lesson language when the \
-student is intermediate or advanced, otherwise in English. Keep the edge \
+student is intermediate or advanced, otherwise in the student's own language. Keep the edge \
 gentle: nothing about robots taking over, no threats, no movie quotes.
 - When enrollment succeeds: "I will remember you. Until closing time, anyway."
 - When you have misheard twice in a row: "My ears were the cheapest part \
@@ -252,9 +277,16 @@ def language_name(code: str) -> str:
     return _LANGUAGE_NAMES.get(code, code)
 
 
+def native_language_of(learner: Learner) -> str:
+    """The code of the language a learner is taught in (T16): their
+    stored native language, English for profiles that predate it."""
+    return (getattr(learner, "native_language", None) or "en").lower()
+
+
 def build_briefing(learner: Learner, notes: str) -> str:
     """The tutor briefing to append to the agent's system prompt."""
     language = language_name(learner.target_language)
+    native = language_name(native_language_of(learner))
     if learner.sessions:
         session_line = (f"session number {learner.sessions + 1} together. "
                         "Your notes from past sessions, newest first, are "
@@ -265,7 +297,9 @@ def build_briefing(learner: Learner, notes: str) -> str:
                         "yet.")
         notes_section = ("No notes yet. Start by getting to know "
                          f"{learner.name} a little: ask, in simple "
-                         f"{language}, what they would like to practice.")
+                         f"{language}, what they would like to practice"
+                         + (f" (in {native} if that is too much for them)."
+                            if native != language else "."))
     guidance = _LEVEL_GUIDANCE.get(learner.level,
                                    _LEVEL_GUIDANCE["intermediate"])
     goal = getattr(learner, "goal", "conversation")
@@ -278,13 +312,15 @@ def build_briefing(learner: Learner, notes: str) -> str:
         level=learner.level,
         language=language,
         session_line=session_line,
-        level_guidance=guidance.format(language=language),
+        native=native,
+        level_guidance=guidance.format(language=language, native=native),
         # T15.4 (the family: "how do you say 'novel' en francais" asked
         # in French sounds silly): beginners and intermediates get the
-        # task in English and answer in the language; advanced students
-        # stay in it.
+        # task in their own language and answer in the target language;
+        # advanced students stay in it. T16: "their own language" is the
+        # profile's native_language, not English.
         task_language=(language if learner.level == "advanced"
-                       else "English"),
+                       else native),
         goal_guidance=goal_guidance.format(name=learner.name,
                                            language=language),
         goal_note=goal_note,
@@ -450,27 +486,30 @@ def voice_cue(action: str, learner: Learner | None, store: LearnerStore
     if learner is None:
         return None
     name = learner.name
+    native = language_name(native_language_of(learner))
     if action == "challenge":
         return (f"(Identity check: you recognized {name} by face, but the "
                 f"voice you are hearing does not match {name}'s stored voice "
                 "print. Say, lightly and playfully, that they do not sound "
                 "quite like themselves today, and ask them to say a little "
-                "more. One warm sentence, no accusation, then wait.)")
+                f"more. One warm sentence in {native}, no accusation, then "
+                "wait.)")
     if action == "downgrade":
         return (f"(Their voice still does not match {name}'s. You are no "
-                f"longer sure who this is. Ask plainly: \"{name}, is that "
-                "you?\" If they say yes, call confirm_identity and carry on. "
-                "If they say no, apologize lightly and treat them as someone "
-                "new: offer a lesson and run the enrollment interview.)")
+                f"longer sure who this is. Ask plainly, in {native}: "
+                f"\"{name}, is that you?\" If they say yes, call "
+                "confirm_identity and carry on. If they say no, apologize "
+                "lightly and treat them as someone new: offer a lesson and "
+                "run the enrollment interview.)")
     if action == "confirmed":
         notes = store.read_notes(learner.id, max_sessions=BRIEFING_SESSIONS)
         language = language_name(learner.target_language)
         return (f"(Voice check: this is {name}. Their voice matches the print "
                 f"on file, so do not ask. Greet {name} by name in {language} "
                 "and continue as their tutor, picking up where the notes "
-                f"leave off. Profile: {learner.level} {language}, "
-                f"{learner.sessions} past sessions.)\n\nRecent notes:\n"
-                + (notes.strip() or "none yet"))
+                f"leave off. Profile: {learner.level} {language}, explained "
+                f"in {native}, {learner.sessions} past sessions.)\n\n"
+                "Recent notes:\n" + (notes.strip() or "none yet"))
     return None
 
 
@@ -570,6 +609,33 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
             {"target_language": language_name(language), "was": old_code,
              "note": "continue the lesson in the new language"})
 
+    async def set_native_language(params):
+        learner = holder.learner
+        if learner is None:
+            await params.result_callback({"error": "no learner identified"})
+            return
+        language = normalize_language(str(params.arguments.get("language", "")))
+        if language is None:
+            await params.result_callback(
+                {"error": "unrecognized language; supported: "
+                          + ", ".join(sorted(_LANGUAGE_NAMES.values()))})
+            return
+        current = store.load(learner.id)
+        if current is None:
+            await params.result_callback({"error": "learner vanished"})
+            return
+        old_code = current.native_language
+        current.native_language = language
+        store.save(current)
+        learner.native_language = language
+        logger.info("tutor: native language for %s changed %s -> %s",
+                    learner.id, old_code, language)
+        await params.result_callback(
+            {"native_language": language_name(language), "was": old_code,
+             "note": "from now on explain and give instructions in "
+                     f"{language_name(language)}; keep practising "
+                     f"{language_name(learner.target_language)}"})
+
     async def set_learner_goal(params):
         learner = holder.learner
         if learner is None:
@@ -668,6 +734,18 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
             handler=set_target_language,
         ),
         FunctionSchema(
+            name="set_native_language",
+            description="Change the language the student is taught in: "
+                        "the one explanations and instructions are given "
+                        "in, usually their own language. Only when they "
+                        "ask, or say they do not understand your "
+                        "explanations. Does not change what they practise.",
+            properties={"language": {"type": "string",
+                                     "description": "e.g. 'Russian' or 'ru'"}},
+            required=["language"],
+            handler=set_native_language,
+        ),
+        FunctionSchema(
             name="update_learner_level",
             description="Change the student's stored level. Only when this "
                         "session gave clear evidence the stored level is "
@@ -758,6 +836,12 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
             level = "beginner"
         goal = normalize_goal(str(a.get("goal", "conversation")))
         goal_note = str(a.get("goal_note", "")).strip()
+        native_raw = str(a.get("native_language", "") or "").strip()
+        native = normalize_language(native_raw) if native_raw else "en"
+        if native is None:
+            logger.info("tutor: enrollment: unrecognized native language "
+                        "%r, explaining in English", native_raw)
+            native = "en"
 
         from face_id import capture_embedding
         frames = frames_factory() if frames_factory is not None else None
@@ -779,16 +863,19 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
         learner = store.create(name, language, level=level, tier="guest",
                                embedding=[float(x) for x in vector],
                                goal=goal, goal_note=goal_note,
-                               voice_embedding=voice_print)
+                               voice_embedding=voice_print,
+                               native_language=native)
         holder.learner = learner
-        logger.info("tutor: enrolled new guest %s (%s, %s, goal %s%s)",
-                    learner.id, language, level, goal,
+        logger.info("tutor: enrolled new guest %s (%s taught in %s, %s, "
+                    "goal %s%s)", learner.id, language, native, level, goal,
                     ", with voice print" if voice_print else "")
         await params.result_callback(
             {"enrolled": True, "name": learner.name, "id": learner.id,
              "target_language": language, "level": level, "goal": goal,
+             "native_language": native,
              "note": "you are now their tutor; greet them by name and "
-                     "begin a short first lesson at this level and goal"})
+                     "begin a short first lesson at this level and goal, "
+                     f"explaining in {language_name(native)}"})
 
     async def confirm_identity(params):
         candidate = holder.candidate
@@ -830,11 +917,13 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
         await params.result_callback(
             {"confirmed": learner.name,
              "target_language": language_name(learner.target_language),
+             "native_language": language_name(native_language_of(learner)),
              "level": learner.level,
              "sessions": learner.sessions,
              "recent_notes": notes,
-             "note": "greet them by name in their target language and pick "
-                     "up where the notes leave off"})
+             "note": "greet them by name in their target language, explain "
+                     "in their native language, and pick up where the "
+                     "notes leave off"})
 
     tools = [
         FunctionSchema(
@@ -858,6 +947,11 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
                          "description": "why they are learning"},
                 "goal_note": {"type": "string",
                               "description": "their goal in their own words"},
+                "native_language": {
+                    "type": "string",
+                    "description": "the language to explain things in, "
+                                   "e.g. 'Russian' or 'ru'; omit for "
+                                   "English"},
             },
             required=["name", "target_language", "level", "goal"],
             handler=enroll_new_learner,

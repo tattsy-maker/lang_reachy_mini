@@ -171,6 +171,12 @@ learners/
 - name (as spoken at enrollment)
 - target language and self-declared or estimated level
   (beginner / intermediate / advanced)
+- native language (T16): the language they are taught *in* — explanations,
+  task setting, the greeting. Defaults to English; a Russian speaker
+  learning English stores `native_language: ru`, `target_language: en`
+- goal (conversation / exam / work / travel / other) and their own words
+  for it (T13)
+- the voice print (T13.9), kept and deleted with the face
 - the face embedding (the number-fingerprint — **not** a photo)
 - session count and last-seen date
 - tier: `family` (permanent) or `guest` (auto-deleted at end of day)
@@ -217,11 +223,13 @@ motion tools (nod, look, etc.). We add:
 | `enroll_new_learner` | Create the folder and capture the face during the "what's your name?" exchange. |
 | `confirm_identity` | When the face match is uncertain and the person says "yes, it's me". |
 | `set_target_language` | Switch the language a learner practices when they ask to, and remember it. |
+| `set_native_language` | Change the language they are taught *in* (T16), when they ask or cannot follow the explanations. |
 | `forget_me` | Delete the learner's folder on the spot (section 8). |
 | `set_volume` | The robot's own speaker level, by request ("speak up", "quieter"). |
 
 **Level adaptation** is prompt-driven, not code-driven: beginner sessions get
-slower, simpler target-language sentences and more English; advanced sessions
+slower, simpler target-language sentences and more of the learner's own
+language (English unless the profile says otherwise, T16); advanced sessions
 get target-language-only with idioms. The stored level just selects the
 briefing; Claude handles the moment-to-moment pitch.
 

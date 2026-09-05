@@ -175,7 +175,10 @@ voice/agent.py`, then serve.
 grounding by default; a search shows in the log as `web search: N
 sources`) ·
 `--language ru|zh` (Piper; models in `voice/piper_voices/`, fetch command
-in `voice/piper_tts.py`) · `--deaf` (never open the mic — **always** with
+in `voice/piper_tts.py`) · `--native-language CODE` (T16, local speech:
+the language the student is taught in and the voice for untagged text;
+default the `--learner` profile's `native_language`, else `en`; the booth
+script passes `BOOTH_NATIVE_LANGUAGE`) · `--deaf` (never open the mic — **always** with
 `--say` scripted runs) · `--persona booth|plain` (T13.5 quips + the
 wishlist question; the booth script passes booth) · `--no-track` (face
 tracking is on whenever there is a camera and a robot, T13.3) ·
@@ -186,7 +189,8 @@ substrings tried in order, default the USB desk mic, falling back to the
 `--audio-device` mic; 2026-09-04) · `--voice-source WAV` (testing: hear this file
 as the visitor at each `--say`). Tools the model can call besides
 motion: `save_session_notes`, `update_learner_level`, `set_learner_goal`,
-`set_target_language`, `forget_me`, `enroll_new_learner`,
+`set_target_language`, `set_native_language` (T16: the language
+explanations are given in), `forget_me`, `enroll_new_learner`,
 `confirm_identity`, `set_volume`, `perform` (dances/emotions/spin from
 `moves.py`), `record_wish`.
 
@@ -308,6 +312,13 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   voices — re-run it on the family's real recordings before trusting a
   challenge on a human. Gemini Live emits no user-speaking frames, so
   the collector gates on audio energy, not turn events.
+- **English is a target language too (T16).** A profile has
+  `native_language` (default `en`) next to `target_language`; the
+  briefing explains in the native one and practises the target. A
+  Russian speaker learning English is `ru`/`en`. Cloud mode needs no
+  flag; local mode's untagged voice is one language per launch
+  (`--native-language`). `grep "taught in" voice/run.log` shows what a
+  session got.
 - **Recorded moves need their datasets on disk.** `moves.py --cached`
   says whether the two Pollen HuggingFace libraries are present;
   `--preload` fetches them. The booth preflight does this with a 60 s

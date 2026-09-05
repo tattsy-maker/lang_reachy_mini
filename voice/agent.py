@@ -111,14 +111,16 @@ from tutor_mode import (                                                # noqa: 
     DEFAULT_LEARNERS_ROOT,
     PERSONAS,
     STRANGER_BRIEFING,
-    UNSURE_BRIEFING,
     CurrentLearner,
     LearnerStore,
     build_briefing,
     build_enrollment_tools,
     build_persona,
     build_tutor_tools,
+    build_unsure_briefing,
+    language_name,
     load_learner,
+    native_language_of,
     voice_cue,
 )
 from tracking import FaceTracker, TrackingLoop                          # noqa: E402
@@ -1030,8 +1032,18 @@ async def run(args) -> None:
     # far more; pipecat's defaults pin both to English. With --language auto
     # (the default) Whisper detects what it heard and LanguageRouter points
     # Kokoro at a matching voice. Pin it to one language to skip all that.
+    # T16: the voice for untagged text (local mode) is the language the
+    # student is taught *in*: --native-language, else the --learner
+    # profile's native_language, else English. A Russian speaker learning
+    # English hears Russian explanations through Piper and English
+    # practice phrases through Kokoro's [en] spans.
+    native_lang = args.native_language
+    if native_lang is None and args.learner:
+        native_lang = load_learner(args.learners_root,
+                                   args.learner)[0].native_language
+    native_lang = (native_lang or "en").lower()
     auto_language = args.language == "auto"
-    start_lang = "en" if auto_language else args.language
+    start_lang = native_lang if auto_language else args.language
 
     stt = tts = language_router = None
     if args.speech == "local":
@@ -1046,8 +1058,10 @@ async def run(args) -> None:
                         args.piper_voices)
         speakable = {**LANGUAGES, **piper_langs}
         if start_lang not in speakable:
-            raise SystemExit("--language %r has no local voice (have: %s)"
-                             % (start_lang, ", ".join(sorted(speakable))))
+            raise SystemExit("%s %r has no local voice (have: %s)"
+                             % ("--language" if not auto_language
+                                else "native language",
+                                start_lang, ", ".join(sorted(speakable))))
         start_voice = args.voice or speakable[start_lang].voice
         spoken_names = ", ".join(v.name for v in speakable.values())
         # The span-tag rule is local-only: per-language voices need it,
@@ -1103,9 +1117,11 @@ async def run(args) -> None:
         base_prompt = SYSTEM_PROMPT.format(
             languages=spoken_names,
             vision=vision_text(args)) + """
-You can teach every language you can speak, Russian and Mandarin included. \
-If a student asks to practice a different language, switch at once and call \
-set_target_language.
+You can teach every language you can speak, Russian and Mandarin included, \
+and English to a speaker of any other language. Explain in the student's \
+own language, whatever it is. If a student asks to practice a different \
+language, switch at once and call set_target_language; if they ask to be \
+taught in a different language, call set_native_language.
 {web_search}\
 Tool discipline: your tools are real actions, not things to mention. \
 Whenever your instructions say to call a tool at a moment (for example \
@@ -1204,8 +1220,7 @@ emit the tool call in that same turn, alongside anything you say.""".format(
                 system_prompt += build_briefing(ident.learner, notes)
             elif ident.status == "unsure":
                 holder.candidate = ident.learner
-                system_prompt += UNSURE_BRIEFING.format(
-                    name=holder.candidate.name)
+                system_prompt += build_unsure_briefing(holder.candidate)
             else:  # unknown face, or no face at all: same stranger flow
                 system_prompt += STRANGER_BRIEFING.format(
                     languages=spoken_names)
@@ -1263,17 +1278,20 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             tools = tools + build_look_tool(hub, args.speech, late, late,
                                             save_dir=args.look_dir or None)
         if holder.learner:
-            logger.info("tutor mode: student %s (%s %s, %d prior sessions, "
-                        "tier %s)", holder.learner.name, holder.learner.level,
-                        holder.learner.target_language,
-                        holder.learner.sessions, holder.learner.tier)
+            native = native_language_of(holder.learner)
+            logger.info("tutor mode: student %s (%s %s taught in %s, %d "
+                        "prior sessions, tier %s)", holder.learner.name,
+                        holder.learner.level, holder.learner.target_language,
+                        native, holder.learner.sessions, holder.learner.tier)
             # Bilingual priming (T7): keep both lesson languages "in mind"
             # so embedded foreign phrases survive transcription better.
             if isinstance(stt, MultilingualWhisperMLX):
-                prompt = bilingual_priming(holder.learner.target_language)
+                prompt = bilingual_priming(holder.learner.target_language,
+                                           native)
                 if prompt:
                     stt.initial_prompt = prompt
-                    logger.info("whisper priming: English + %s",
+                    logger.info("whisper priming: %s + %s",
+                                language_name(native),
                                 holder.learner.target_language)
 
     # Cloud mode: Gemini Live's native Google Search grounding rides along
@@ -1610,6 +1628,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "turn and answers in it. Naming one pins both "
                         "recognition and speech to it. ru/zh need their "
                         "Piper voices on disk (see --piper-voices).")
+    g.add_argument("--native-language", default=None, metavar="CODE",
+                   choices=list(LANGUAGES) + list(PIPER_LANGUAGES),
+                   help="the language the student is taught in, which is "
+                        "the voice for untagged text in local mode "
+                        "(default: the --learner profile's native "
+                        "language, else en). Cloud mode reads it from the "
+                        "profile and needs no flag.")
     g.add_argument("--stop-secs", type=float, default=0.35,
                    help="VAD silence before end-of-speech is considered")
     g.add_argument("--no-warmup", action="store_true",

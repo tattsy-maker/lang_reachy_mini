@@ -295,9 +295,9 @@ def test_enrollment_stores_the_face_that_started_the_session():
     assert enrollment_face(None, None) == (None, None)
 
 
-# -- T15.4: tasks in English below advanced -------------------------------------------------
+# -- T15.4: tasks in the student's own language below advanced ---------------------------------
 
-def test_briefing_sets_tasks_in_english_below_advanced(tmp_path):
+def test_briefing_sets_tasks_in_own_language_below_advanced(tmp_path):
     store = LearnerStore(tmp_path / "learners")
     for level, task_language in (("beginner", "English"),
                                  ("intermediate", "English"),
@@ -306,6 +306,14 @@ def test_briefing_sets_tasks_in_english_below_advanced(tmp_path):
         text = build_briefing(learner, "")
         assert f"say what to express in {task_language}" in text, level
         assert "how do you say X" in text and "role-play" in text
+    # T16: "own language" is the profile's native language, not English
+    for level, task_language in (("beginner", "Russian"),
+                                 ("intermediate", "Russian"),
+                                 ("advanced", "English")):
+        learner = store.create(f"R{level}", "en", level=level,
+                               native_language="ru")
+        text = build_briefing(learner, "")
+        assert f"say what to express in {task_language}" in text, level
 
 
 def test_agent_prompt_no_longer_claims_it_cannot_see():

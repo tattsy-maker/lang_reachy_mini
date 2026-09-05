@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "voice"))
 
 from tutor.store import GOALS, LearnerStore  # noqa: E402
 from tutor_mode import (  # noqa: E402
-    ENROLLMENT_SCRIPT, STRANGER_BRIEFING, UNSURE_BRIEFING,
+    ENROLLMENT_SCRIPT, STRANGER_BRIEFING, UNSURE_BRIEFING, build_unsure_briefing,
     build_briefing, normalize_goal,
 )
 
@@ -100,7 +100,7 @@ def test_normalize_goal_maps_free_text():
     assert normalize_goal("EXAM") == "exam"
 
 
-def test_stranger_briefing_is_a_four_question_script():
+def test_stranger_briefing_is_a_four_question_script(tmp_path):
     text = STRANGER_BRIEFING.format(languages="Spanish, French")
     for n, needle in ((1, "their name"), (2, "which language"),
                       (3, "beginner, intermediate or advanced"),
@@ -110,11 +110,18 @@ def test_stranger_briefing_is_a_four_question_script():
     assert "never assume" in text
     assert "beginner level unless" not in text, "the old default is gone"
     # the unsure path falls into the same interview, and formats with
-    # only a name (its callers never pass languages)
-    unsure = UNSURE_BRIEFING.format(name="Maria")
+    # only a name and the candidate's own language (its callers never
+    # pass languages)
+    unsure = UNSURE_BRIEFING.format(name="Maria", native="English")
     assert "enrollment interview" in unsure and "3." in unsure
     assert "{" not in unsure, "unsubstituted placeholder would be read aloud"
     assert ENROLLMENT_SCRIPT.count("{languages}") == 1
+    # T16: the question is asked in the candidate's own language
+    store = LearnerStore(tmp_path / "learners")
+    igor = store.create("Igor", "en", native_language="ru")
+    built = build_unsure_briefing(igor)
+    assert "Open in Russian" in built and "Igor, is that you?" in built
+    assert "{" not in built
 
 
 # -- live enrollment interview -------------------------------------------------
