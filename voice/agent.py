@@ -239,6 +239,24 @@ You have a camera, but only for recognizing faces: you know when someone is in \
 front of you, and who they are if you have met them. You see nothing else, so \
 do not describe surroundings or invent details."""
 
+# With the look tool (T14.1). The old wording made the robot say "I cannot
+# describe you, I only see you to recognize you" and then, ten seconds
+# later, describe the visitor's hair (2026-09-04) -- the prompt and the
+# tool contradicted each other. T15.4.
+VISION_FACE_LOOK = """\
+You have a camera. On your own you use it only to recognize faces: you know \
+when someone is in front of you, and who they are if you have met them; you \
+do not watch the room. When someone asks what you see, or you want to check \
+who is in front of you, call look and describe that one picture in a \
+sentence or two. Never say you cannot see; never describe anything you did \
+not just look at."""
+
+
+def vision_text(args) -> str:
+    if not args.face_source:
+        return VISION_NONE
+    return VISION_FACE if args.no_look else VISION_FACE_LOOK
+
 # {languages} is filled in at startup with the languages that can really
 # be spoken on this machine: Kokoro's verified set plus whatever Piper
 # voices are on disk (T5). A static list here would make Claude refuse
@@ -995,7 +1013,7 @@ async def run(args) -> None:
         tutor_mode = bool(args.learner or args.face_source or args.session)
         base_prompt = SYSTEM_PROMPT.format(
             languages=spoken_names,
-            vision=VISION_FACE if args.face_source else VISION_NONE,
+            vision=vision_text(args),
         ) + SPAN_TAG_RULE.format(main=speakable[start_lang].name)
 
         if auto_language:
@@ -1042,7 +1060,7 @@ async def run(args) -> None:
                            "or two spoken sentences, and never read out URLs.\n")
         base_prompt = SYSTEM_PROMPT.format(
             languages=spoken_names,
-            vision=VISION_FACE if args.face_source else VISION_NONE) + """
+            vision=vision_text(args)) + """
 You can teach every language you can speak, Russian and Mandarin included. \
 If a student asks to practice a different language, switch at once and call \
 set_target_language.
@@ -1149,7 +1167,8 @@ emit the tool call in that same turn, alongside anything you say.""".format(
                 system_prompt += STRANGER_BRIEFING.format(
                     languages=spoken_names)
         tools = tools + build_tutor_tools(store, holder,
-                                          wishes_path=args.wishes_file)
+                                          wishes_path=args.wishes_file,
+                                          ask_wish=(args.persona == "booth"))
 
         # Voice print (T13.9): a second identity signal, fused with the
         # face's verdict. Samples come from the raw input audio (or from
@@ -1162,7 +1181,7 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             async def on_voice_sample(vector, secs):
                 if session_runner is not None:
                     session_runner.note_voice()   # speech is presence
-                action = voice_identity.on_sample(vector)
+                action = voice_identity.on_sample(vector, secs)
                 if action == "speaker_changed" and session_runner is not None:
                     await session_runner.speaker_changed()
                 elif action in ("challenge", "downgrade", "confirmed"):
@@ -1187,7 +1206,12 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             tools = tools + build_enrollment_tools(
                 store, holder, args.face_source,
                 frames_factory=(hub.frames if hub is not None else None),
-                voice_identity=voice_identity)
+                voice_identity=voice_identity,
+                # T15.1: the session runner (built below) knows which
+                # face started the session; enrollment stores that one
+                # when the capture disagrees with it.
+                session_face=lambda: getattr(late.get("runner"), "_session_face",
+                                             None))
         if hub is None and args.face_source and not args.no_look:
             # Sight needs a live frame source for the whole run.
             from face.camera import FrameHub
@@ -1318,6 +1342,13 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             # Nobody is there at startup: do not stream the room until a
             # face starts a session (CloudBrain.reset resumes the mic).
             gemini_kwargs["start_audio_paused"] = True
+            # T15.5: pipecat seeds every fresh connection with the prompt
+            # as a user turn and, by default, makes the model answer it.
+            # That was the "Hello there, I do not see anyone" to an empty
+            # chair at startup and the second of three greetings at each
+            # walk-up (2026-09-04). In session mode the runner's walk-up
+            # cue is the one and only greeting.
+            gemini_kwargs["inference_on_context_initialization"] = False
         gemini = GeminiLiveLLMService(**gemini_kwargs)
         late["service"] = gemini
         logger.info("speech: cloud (Gemini Live, model %s)",
@@ -1328,6 +1359,9 @@ emit the tool call in that same turn, alongside anything you say.""".format(
         stages = [transport.input(), aggregators.user()]
         if voice_collector is not None:
             stages.append(voice_collector.as_processor())
+            # T15.7: no user-speaking frames from Gemini Live, so the
+            # turn timer takes the visitor's stop from the energy gate.
+            voice_collector.on_speech_end = embodiment.note_user_stopped
         pipeline = Pipeline(stages + [
             gemini,
             CloudTranscriptLogger(),  # "said: ..." and "web search: ..."
@@ -1391,6 +1425,7 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             stable_secs=args.stable_secs, absent_secs=args.absent_secs,
             hub=hub, tracker=tracker, attract_secs=args.attract_secs,
             voice_identity=voice_identity,
+            speaking=lambda: embodiment.bot_speaking,     # T15.6
             # Cloud mode (T14.3): cues go through Gemini's own injection
             # path and every visitor gets a fresh server-side session.
             cue=say_cue if args.speech == "cloud" else None,
@@ -1399,6 +1434,7 @@ emit the tool call in that same turn, alongside anything you say.""".format(
         # Speech is presence (T13.2): a visitor out of frame but talking
         # is not gone.
         embodiment.on_user_speech = session_runner.note_voice
+        late["runner"] = session_runner
         session_task = asyncio.create_task(session_runner.run())
         logger.info("session mode: watching for a face (stable %.1fs, "
                     "still-there at %.0fs, walk-away %.0fs%s)",
@@ -1450,8 +1486,9 @@ emit the tool call in that same turn, alongside anything you say.""".format(
         # and the robot sat there unresponsive. Kick the conversation off
         # the way pipecat's own examples do -- the model greets first.
         # In session mode the runner greets when a face is stable; the
-        # kick-off here only seeds the context so the mic starts flowing
-        # (the idle prompt tells the model to stay quiet).
+        # kick-off here only seeds the context so the mic starts flowing,
+        # and inference_on_context_initialization=False (above) keeps
+        # the model from answering the seed out loud (T15.5).
         async def cloud_kickoff():
             await asyncio.sleep(1.0)
             await task.queue_frames([LLMRunFrame()])

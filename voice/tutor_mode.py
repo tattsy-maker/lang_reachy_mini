@@ -113,6 +113,11 @@ the lesson. But if {name} clearly asks to practice a different language, that \
 is allowed and welcome: switch at once and call set_target_language so it is \
 remembered.
 - {level_guidance}
+- Setting a task: say what to express in {task_language} and have {name} \
+say it in {language} ("How would you ask for a room for two?"), so the \
+phrase is theirs. Never ask "how do you say X" for one word when your own \
+question already contains the answer. Prefer short role-play where you \
+play the other side (a hotel desk, a cafe, a shop), one exchange at a time.
 - Correct every mistake, briefly and kindly. Give the right form, let the \
 lesson move on. Never let an error slide, and never lecture about grammar \
 for more than one sentence.
@@ -268,6 +273,12 @@ def build_briefing(learner: Learner, notes: str) -> str:
         language=language,
         session_line=session_line,
         level_guidance=guidance.format(language=language),
+        # T15.4 (the family: "how do you say 'novel' en francais" asked
+        # in French sounds silly): beginners and intermediates get the
+        # task in English and answer in the language; advanced students
+        # stay in it.
+        task_language=(language if learner.level == "advanced"
+                       else "English"),
         goal_guidance=goal_guidance.format(name=learner.name,
                                            language=language),
         goal_note=goal_note,
@@ -331,11 +342,81 @@ class CurrentLearner:
         self.learner = learner
         self.candidate: Learner | None = None
         self.saved_ids: set[str] = set()
+        # T15.6: the runner raises ``walkaway`` while it is closing a
+        # session for someone who left (no wish question to an empty
+        # chair); ``wish_recorded`` keeps the question to once a visit.
+        self.walkaway = False
+        self.wish_recorded = False
 
     def reset(self) -> None:
         self.learner = None
         self.candidate = None
         self.saved_ids.clear()
+        self.walkaway = False
+        self.wish_recorded = False
+
+
+# The wish question (T13.6/T14.4), enforced in code since T15.6: on
+# 2026-09-04 the model saved notes and said goodbye without ever asking
+# it, so the notes tool's own result now carries the next line.
+WISH_QUESTION = ("Before you go, one quick question: if this were a robot "
+                 "you had bought, what would you want it to do?")
+
+
+def wish_followup(holder: CurrentLearner, ask_wish: bool) -> str | None:
+    """What save_session_notes should tell the model to do next: ask
+    the wish question (booth persona, visitor still here, not asked yet)
+    or nothing."""
+    if not ask_wish or holder.walkaway or holder.wish_recorded:
+        return None
+    return ("notes saved. They are still here, so ask exactly this now and "
+            f"then stop and wait for the answer: \"{WISH_QUESTION}\" When "
+            "they answer, call record_wish with their words, thank them in "
+            "one sentence, and only then say goodbye.")
+
+
+def enrollment_face(captured, session_face) -> tuple:
+    """T15.1, found by the live seat-swap test: enroll_new_learner used to
+    store whatever face was in front of the camera *when the tool ran*,
+    which can be a bystander leaning in, or the next person, minutes
+    after the interview started. Returns (vector, note): the captured
+    face when it agrees with the face that started the session (or when
+    there is no session face), else the session's face -- the person
+    who has been there all along is the one who answered the four
+    questions."""
+    if session_face is None:
+        return captured, None
+    if captured is None:
+        return session_face, "no face at capture time; using the session's face"
+    from face import recognize
+    score = recognize.similarity(captured, session_face)
+    if score < recognize.REJECT_THRESHOLD:
+        return session_face, ("the face captured now is not the one that "
+                              "started the session (score %.3f); storing "
+                              "the session's face" % score)
+    return captured, None
+
+
+def face_confirms(candidate_embedding, live_vector) -> tuple[str, float | None]:
+    """T15.3: is the face in front of the camera the candidate's?
+
+    Returns ("match" | "mismatch" | "unknown", score). A verbal "yes" to
+    "is that you?" used to be accepted from anyone; now the current face
+    is compared with the candidate's stored embedding and only a face
+    below the recognizer's reject line contradicts the yes (the candidate
+    got into the ask band with a mediocre score, so demanding a *sure*
+    match here would refuse the people it was built for). No face or no
+    stored embedding: "unknown", and the yes stands."""
+    if candidate_embedding is None or live_vector is None:
+        return "unknown", None
+    from face import recognize
+    try:
+        score = recognize.similarity(live_vector, candidate_embedding)
+    except Exception:                                          # noqa: BLE001
+        return "unknown", None
+    if score < recognize.REJECT_THRESHOLD:
+        return "mismatch", score
+    return "match", score
 
 
 def normalize_language(value: str) -> str | None:
@@ -383,8 +464,10 @@ def voice_cue(action: str, learner: Learner | None, store: LearnerStore
 
 
 def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
-                      wishes_path=None) -> list:
-    """The memory tools, same FunctionSchema style as the motion tools."""
+                      wishes_path=None, ask_wish: bool = False) -> list:
+    """The memory tools, same FunctionSchema style as the motion tools.
+    ``ask_wish`` (booth persona): a notes save for someone still present
+    answers with the wish question to ask next (T15.6)."""
     from pipecat.adapters.schemas.function_schema import FunctionSchema
 
     saved_ids = holder.saved_ids
@@ -414,8 +497,13 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
         saved_ids.add(learner.id)
         logger.info("tutor: saved session notes for %s (now %d sessions)",
                     learner.id, updated.sessions)
-        await params.result_callback(
-            {"saved": True, "session": updated.sessions})
+        result = {"saved": True, "session": updated.sessions}
+        followup = wish_followup(holder, ask_wish)
+        if followup:
+            result["note"] = followup
+            logger.info("tutor: notes saved with the visitor present -> "
+                        "asking the wish question")
+        await params.result_callback(result)
 
     async def update_learner_level(params):
         learner = holder.learner
@@ -496,6 +584,7 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
         name = holder.learner.name if holder.learner else None
         path = await asyncio.to_thread(_record_wish, text, name=name,
                                        path=wishes_path)
+        holder.wish_recorded = True
         logger.info("booth: wish recorded (%s): %s", name or "anonymous", text)
         await params.result_callback(
             {"recorded": True, "file": os.path.basename(str(path)),
@@ -594,7 +683,8 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
 
 def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
                            face_source, frames_factory=None,
-                           voice_identity=None) -> list:
+                           voice_identity=None, current_face=None,
+                           session_face=None) -> list:
     """enroll_new_learner and confirm_identity, registered alongside the
     memory tools whenever the agent has a face source. confirm_identity
     resolves ``holder.candidate`` — the unsure face match set at startup
@@ -602,8 +692,22 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
 
     ``frames_factory`` (T13.3), when given, returns an iterable of frames
     from the shared camera hub instead of reopening ``face_source`` -- a
-    V4L2 device cannot be streamed twice."""
+    V4L2 device cannot be streamed twice. ``current_face`` (T15.3) is a
+    callable returning the embedding of the face in front of the camera
+    right now (or None); the default captures it from the same frames.
+    confirm_identity checks that face against the candidate before
+    accepting a verbal yes, and re-arms the voice check on success.
+    ``session_face`` (T15.1) returns the embedding of the face that
+    started the current session, or None; enrollment stores that face
+    when the capture disagrees with it (see ``enrollment_face``)."""
     from pipecat.adapters.schemas.function_schema import FunctionSchema
+
+    if current_face is None:
+        def current_face():
+            from face_id import capture_embedding
+            frames = frames_factory() if frames_factory is not None else None
+            return capture_embedding(face_source, frames=frames,
+                                     samples=2, max_frames=6)
 
     async def enroll_new_learner(params):
         if holder.learner is not None:
@@ -635,6 +739,10 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
         frames = frames_factory() if frames_factory is not None else None
         vector = await asyncio.to_thread(capture_embedding, face_source,
                                          frames=frames)
+        started_with = session_face() if session_face is not None else None
+        vector, note = enrollment_face(vector, started_with)
+        if note:
+            logger.info("tutor: enrollment: %s", note)
         if vector is None:
             await params.result_callback(
                 {"error": "no face visible right now; ask them to look at "
@@ -668,9 +776,33 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
         if learner is None:
             await params.result_callback({"error": "learner vanished"})
             return
+        try:
+            live = await asyncio.to_thread(current_face)
+        except Exception as exc:                               # noqa: BLE001
+            logger.warning("tutor: face check failed (%s); taking the yes",
+                           exc)
+            live = None
+        verdict, score = face_confirms(learner.embedding, live)
+        if verdict == "mismatch":
+            logger.info("tutor: '%s' said yes but the face in front of the "
+                        "camera is not theirs (score %.3f); not confirming",
+                        learner.id, score)
+            holder.candidate = None
+            await params.result_callback(
+                {"confirmed": False,
+                 "reason": f"the face in front of you is not {learner.name}'s. "
+                           "Apologize lightly, ask their name, and treat "
+                           "them as someone new: offer a lesson and, on a "
+                           "clear yes to being remembered, run the "
+                           "enrollment interview."})
+            return
         holder.learner = learner
+        holder.candidate = None
+        if voice_identity is not None:
+            voice_identity.rearm()
         notes = store.read_notes(learner.id, max_sessions=BRIEFING_SESSIONS)
-        logger.info("tutor: identity confirmed as %s", learner.id)
+        logger.info("tutor: identity confirmed as %s (face %s%s)", learner.id,
+                    verdict, "" if score is None else " %.3f" % score)
         await params.result_callback(
             {"confirmed": learner.name,
              "target_language": language_name(learner.target_language),
@@ -712,7 +844,10 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
         description="The person verbally confirmed they are the student "
                     "you tentatively recognized. Call this to load their "
                     "profile and notes, then continue as their tutor. Only "
-                    "after an explicit yes to your 'is that you?' question.",
+                    "after an explicit yes to your 'is that you?' question. "
+                    "The face in front of the camera is checked against "
+                    "their profile; if the result says it is not them, "
+                    "follow its instructions instead.",
         properties={}, required=[], handler=confirm_identity,
     ))
     return tools

@@ -75,6 +75,16 @@ EMBED_DIM = 192
 # you" is rude and a wrong "it is you" defeats the point. Re-measure on
 # the family's real voices (point the gate at their recordings) before
 # trusting these on humans: synthetic voices vary less than people do.
+#
+# First human data (booth logs): an adult's live samples scored 0.91
+# against his own print (2026-09-03); a child speaking French after an
+# English enrollment scored 0.20-0.75 against his own print in one
+# session (2026-09-04: 0.683 and 0.748 when it matched, 0.199-0.447
+# when it did not, on 1.7-2.5 s samples). No threshold separates that,
+# which is why since T15 the voice can only *ask*: a verified learner
+# is never dropped on voice evidence while the face still matches
+# (session.py), decisions need ``decision_min_secs`` of speech, and a
+# speaker change needs ``change_after`` misses in a row.
 ACCEPT_THRESHOLD = 0.60    # at or above: same voice
 REJECT_THRESHOLD = 0.45    # below: a different voice
 # between: not enough evidence either way -- keep listening
@@ -202,18 +212,29 @@ class VoiceIdentity:
         "confirmed"   face was unsure, the voice settled it
         "speaker_changed"  a verified learner's voice stopped matching for
                       several samples in a row: someone else is talking
-                      (the session runner ends the session, T14.3)
+                      (the session runner decides, T14.3/T15.1: the face
+                      is the arbiter -- while it still matches, this is
+                      ignored and the policy is re-armed)
+
+    T15.2: the voice asks, it never ends. ``decision_min_secs`` of speech
+    is needed before a sample may score against a print (the 2026-09-04
+    false rejections were all on 1.7-2.5 s clips; short samples still
+    feed the running print). ``change_after`` is four, not two.
+    ``rearm()`` puts a downgraded/changed policy back to listening once
+    the person has been confirmed, so a "yes" does not switch the check
+    off for the rest of the session.
     """
 
     def __init__(self, store, holder, *, learn_after: int = 2,
                  accept: float = ACCEPT_THRESHOLD,
                  reject: float = REJECT_THRESHOLD, window: int = 1,
-                 change_after: int = 2):
+                 change_after: int = 4, decision_min_secs: float = 3.0):
         self.store = store
         self.holder = holder
         self.learn_after = learn_after
         self.accept = accept
         self.reject = reject
+        self.decision_min_secs = decision_min_secs
         # Compare the *recent* voice, not the whole session's mean: on
         # 2026-09-03 a second person talked for minutes and the session
         # mean, dominated by the first speaker's samples, kept matching
@@ -234,6 +255,19 @@ class VoiceIdentity:
         self.downgraded = False
         self.changed = False
         self.last_score: float | None = None
+
+    def rearm(self) -> str | None:
+        """The person was confirmed by other evidence (a face match, a
+        verbal yes checked against the face): forget the misses and keep
+        listening. Returns "rearmed" when anything was pending."""
+        pending = self.changed or self.downgraded or self.challenged \
+            or self.consecutive_mismatches
+        self.changed = self.downgraded = self.challenged = False
+        self.mismatches = self.consecutive_mismatches = 0
+        if pending:
+            logger.info("voice: re-armed, listening again")
+            return "rearmed"
+        return None
 
     @property
     def print(self) -> np.ndarray | None:
@@ -266,10 +300,13 @@ class VoiceIdentity:
         self.store.save(current)
         learner.voice_embedding = current.voice_embedding
 
-    def on_sample(self, vector) -> str | None:
+    def on_sample(self, vector, secs: float | None = None) -> str | None:
+        """One utterance's embedding; ``secs`` is how much speech it holds
+        (None: unknown, e.g. an injected file -- always judged)."""
         self.samples.append(np.asarray(vector, dtype=np.float32))
         learner = self.holder.learner
         candidate = self.holder.candidate
+        short = secs is not None and 0 < secs < self.decision_min_secs
 
         if learner is not None:
             stored = learner.voice_embedding
@@ -281,6 +318,11 @@ class VoiceIdentity:
                     return "learned"
                 return None
             if self.downgraded or self.changed:
+                return None
+            if short:
+                logger.info("voice: %.1fs is too short to judge (need %.1fs)"
+                            ", kept for the print only", secs,
+                            self.decision_min_secs)
                 return None
             score = self._score(stored)
             if score >= self.accept:
@@ -326,7 +368,7 @@ class VoiceIdentity:
             return None
 
         if candidate is not None and candidate.voice_embedding \
-                and not self.downgraded:
+                and not self.downgraded and not short:
             score = self._score(candidate.voice_embedding)
             if score >= self.accept:
                 self.holder.learner = candidate
@@ -370,6 +412,13 @@ class VoiceCollector:
         self.min_secs = min_secs
         self.enabled = True
         self.bot_speaking = False
+        # T15.7: ``on_speech_end(t_monotonic)`` fires when the visitor
+        # goes quiet after at least ``speech_end_min_secs`` of speech,
+        # stamped with when the speech ended (not when we noticed). The
+        # turn timer in embodiment.py uses it in cloud mode, where the
+        # service emits no user-speaking frames.
+        self.on_speech_end = None
+        self.speech_end_min_secs = 0.4
         self._noise = 0.003
         self._speech: list[np.ndarray] = []
         self._speech_secs = 0.0
@@ -402,10 +451,20 @@ class VoiceCollector:
         if self._speech:
             self._quiet_secs += secs
             if self._quiet_secs >= self.silence_secs:
+                self._note_speech_end()
                 if self._speech_secs >= self.min_secs:
                     return self._close()
                 self._speech, self._speech_secs = [], 0.0
         return None
+
+    def _note_speech_end(self) -> None:
+        if self.on_speech_end is None \
+                or self._speech_secs < self.speech_end_min_secs:
+            return
+        try:
+            self.on_speech_end(time.monotonic() - self._quiet_secs)
+        except Exception as exc:                                # noqa: BLE001
+            logger.warning("voiceid: speech-end hook failed: %s", exc)
 
     def _close(self):
         audio = np.concatenate(self._speech)
@@ -459,7 +518,7 @@ class VoiceCollector:
         self.samples_taken += 1
         logger.info("voice: sample %d (injected from %s)", self.samples_taken,
                     os.path.basename(str(path)))
-        await self._deliver(vector, 0.0)
+        await self._deliver(vector, None)   # a file is always judged
 
     # -- pipecat ---------------------------------------------------------------
 

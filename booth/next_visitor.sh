@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Restart just the voice agent for the next visitor (cloud mode is one
-# visitor per launch until T12). serve and the vendor daemon stay up, so
-# this takes ~6 s. Stand in front of the camera while it starts: it
-# looks for a face once, in the first ~3 s.
+# Restart just the voice agent by hand. Since T14.3 the booth loop swaps
+# visitors by itself (a new face, a walk-away), so this is only for
+# recovering a wedged agent. serve and the vendor daemon stay up, so it
+# takes ~6 s. Stand in front of the camera while it starts: it looks for
+# a face once, in the first ~3 s.
 #
 #   booth/next_visitor.sh            # cloud voice, booth persona
 #   booth/next_visitor.sh --say "…"  # extra agent flags pass through

@@ -122,15 +122,16 @@ reading them. If the agent stops answering mid-conversation, the first thing to
 check is `grep "dropping unconvertible thought" voice/agent.log` (see the voice
 README for why).
 
-## Language tutor (state as of 2026-09-02)
+## Language tutor (state as of 2026-09-04)
 
 Product spec: `LANGUAGE_TUTOR_SPEC.md`. Tracker with per-task status and
 dated logs: `TASKS.md`. Details and learnings per task: `progress/T*.md`.
-T0–T10 are done; T11 (Faire hardening) is mid-rehearsal; T13 (the
-family's debrief feedback) and T14 (second session: sight, calm
-tracking, one visitor at a time over the cloud voice — this absorbed
-T12) are built on the simulated path. Read `progress/T14.md` first for
-what the last session's log showed.
+T0–T10 are done; T11 (Faire hardening) is mid-rehearsal; T13, T14 and
+T15 (the three family sessions' feedback: goals and presence; sight,
+calm tracking and one visitor at a time over the cloud voice; identity
+for the whole session, one greeting, the lag line) are built on the
+simulated path. Read `progress/T15.md` first for what the last
+session's log showed and the protocol to run at the next one.
 
 ### Start the booth
 
@@ -242,6 +243,25 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   watcher, the face tracker) reads from the shared `FrameHub`
   (`face/camera.py`), and enrollment takes its snapshots from the hub
   too. Do not open `Camera(0)` yourself while the agent is up.
+- **Identity is the face's call for the whole session (T15).** The
+  runner re-embeds the largest face every 2 s while a session is on and
+  compares it with the face that started it. The same face keeps the
+  session whatever the voice print says (`voice says someone else, but
+  X's face was seen`); a different face for 3 s is a `face swap`
+  (goodbye + notes, newcomer greeted); the voice ends a session only
+  with nobody in frame. `confirm_identity` checks the current face
+  before accepting a "yes". If a session ends "for no reason", read the
+  `session:` lines before touching thresholds.
+- **Gemini answers the seed unless told not to.** pipecat sends each new
+  connection's context (the system prompt as a user turn) with
+  `turn_complete=True` by default; that was the greeting to an empty
+  chair and the extra greetings at every walk-up. Session mode passes
+  `inference_on_context_initialization=False`; the walk-up cue is the
+  only greeting. A hand-started cloud run (no `--session`) keeps the
+  default so the robot still greets first.
+- **Lag has a number now.** `grep "turn: first sound" voice/run.log`
+  gives visitor-stop → first sound per reply (cloud: from the voice
+  collector's energy gate, so ±0.8 s). Measure before tuning.
 - **Who owns which joint.** The face tracker owns `head_yaw`/`body_yaw`;
   embodiment owns pitch and antennas (the tracker only biases pitch).
   A tool call that turns the head/body, `perform`, or `reset_pose`

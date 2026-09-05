@@ -37,11 +37,19 @@ while, play a short recorded move every few minutes so the booth reads
 as alive from across the hall -- and the feed to the face tracker
 (T13.3), which shares the runner's frames.
 
-Spec note (§4A): recognition is *supposed* to be paused during
-conversation. Presence still has to be tracked to detect the walk-away,
-so during an active session frames are embedded only for "is a face
-there" — the identity is never re-evaluated mid-session. Embedding costs
-~95 ms on this box's CPU (measured, T2), which the GPU never sees.
+Identity during a session (T15.1, replacing the spec's original §4A
+"recognize once, then presence only"): on 2026-09-04 one visitor took
+another's seat mid-lesson and the robot tutored him under her name for
+the rest of the session, because nothing looked at the face again after
+the greeting and the voice check had been switched off by a verbal
+"yes". So the face is now the arbiter for the whole session: every
+``face_recheck_secs`` (and at once when a face reappears after a gap)
+the largest face is embedded and compared with the face that started
+the session. The same face keeps the session alive whatever the voice
+print says; a different face held for ``swap_secs`` ends the session
+(goodbye + notes for the person who left) and the newcomer gets their
+own. Embedding costs ~95 ms on this box's CPU (measured, T2), which the
+GPU never sees; at one in two seconds that is under 5% of a core.
 """
 
 from __future__ import annotations
@@ -80,6 +88,15 @@ WALKAWAY_CUE = ("(The visitor seems to have left. Say one short goodbye "
 STILL_THERE_CUE = ("(You have not seen or heard the visitor for a while. "
                    "Ask, in one short sentence in the lesson language, "
                    "whether they are still there. Nothing else.)")
+
+# T15.4, the family's own suggestion ("warn him in advance that many
+# people will come"): every prompt the runner builds carries this.
+BOOTH_NOTE = """
+
+You are at a busy booth. People walk up, swap seats and leave without \
+warning, often mid-sentence, so the person in front of you can change at \
+any moment. If a voice or an answer does not fit the student you were \
+talking to, do not assume: call look, or ask their name."""
 
 
 class SessionMachine:
@@ -198,13 +215,16 @@ class SessionRunner:
                  fps: float = 2.0, samples: int = 3,
                  save_wait_secs: float = 30.0, hub=None, tracker=None,
                  attract_secs: float = 0.0, attract_every: float = 180.0,
-                 voice_identity=None, cue=None, brain=None):
+                 voice_identity=None, cue=None, brain=None,
+                 face_recheck_secs: float = 2.0, swap_secs: float = 3.0,
+                 face_vouch_secs: float = 5.0, speaking=None,
+                 booth_note: bool = True):
         self.source = source
         self.store = store
         self.holder = holder
         self.context = context
         self.task = task
-        self.base_prompt = base_prompt
+        self.base_prompt = base_prompt + (BOOTH_NOTE if booth_note else "")
         self.languages = languages
         self.robot = robot
         self.stt = stt  # optional: bilingual priming per learner (T7)
@@ -227,6 +247,23 @@ class SessionRunner:
         self._voice_at: float | None = None
         self._voice_seen: float | None = None
         self._presence = "gone"
+        # T15.1: identity for the whole session. ``face_recheck_secs``
+        # between recognition passes while active; a different face for
+        # ``swap_secs`` ends the session; a face match within
+        # ``face_vouch_secs`` overrules the voice print.
+        self.face_recheck_secs = face_recheck_secs
+        self.swap_secs = swap_secs
+        self.face_vouch_secs = face_vouch_secs
+        self._session_face = None          # who this session started with
+        self._same_face_at: float | None = None
+        self._other_since: float | None = None
+        self._last_recheck: float = -1e9
+        self._force_recheck = False
+        self._face_absent_since: float | None = None
+        # T15.6: ``speaking()`` -> is the robot talking; a goodbye gets
+        # to finish before the next greeting, a greeting waits for the
+        # previous visitor's last words.
+        self.speaking = speaking
 
     # -- presence inputs from the pipeline ----------------------------------
 
@@ -281,6 +318,28 @@ class SessionRunner:
             self._presence = state
             logger.info("presence: %s", state)
 
+    async def _wait_quiet(self, max_secs: float,
+                          start_grace: float = 0.0) -> None:
+        """Let the robot finish what it is saying (T15.6): on 2026-09-04
+        a forced goodbye and the next greeting came out in one breath.
+        ``start_grace``: also wait this long for speech to *begin* --
+        after the notes save the goodbye is still being generated, so
+        "not speaking yet" is not "done"."""
+        if self.speaking is None:
+            return
+        t0 = time.monotonic()
+        while (start_grace and not self.speaking()
+               and time.monotonic() - t0 < start_grace):
+            await asyncio.sleep(0.1)
+        deadline = t0 + max_secs
+        waited = False
+        while time.monotonic() < deadline and self.speaking():
+            waited = True
+            await asyncio.sleep(0.2)
+        if waited:
+            logger.info("session: waited %.1fs for the robot to finish "
+                        "speaking", time.monotonic() - t0)
+
     # -- choreography ------------------------------------------------------
 
     def idle_prompt(self) -> str:
@@ -329,9 +388,16 @@ class SessionRunner:
     async def start_session(self, now: float) -> None:
         from face import recognize
         face = recognize.enroll_from_vectors(self._recent_vectors)
+        await self._wait_quiet(4.0)
         self.holder.reset()
         if self.voice_identity is not None:
             self.voice_identity.reset()
+        self._session_face = face
+        self._same_face_at = now
+        self._other_since = None
+        self._last_recheck = now
+        self._force_recheck = False
+        self._face_absent_since = None
         briefing = self._briefing_for(face)
         await self._set_system_prompt(self.base_prompt + briefing)
         self.machine.session_started(now)
@@ -349,6 +415,7 @@ class SessionRunner:
     async def end_session(self) -> None:
         self._log_presence("gone")
         learner = self.holder.learner
+        self.holder.walkaway = True      # no wish question to an empty chair
         if learner is not None and learner.id not in self.holder.saved_ids:
             logger.info("session: walk-away, goodbye + notes on %s",
                         learner.id)
@@ -360,9 +427,13 @@ class SessionRunner:
             if learner.id not in self.holder.saved_ids:
                 logger.warning("session: notes were never saved for %s",
                                learner.id)
+            await self._wait_quiet(10.0, start_grace=3.0)  # the goodbye, in full
         self.holder.reset()
         if self.voice_identity is not None:
             self.voice_identity.reset()
+        self._session_face = None
+        self._same_face_at = self._other_since = None
+        self._recent_vectors = []        # the next face starts clean
         if self.stt is not None and hasattr(self.stt, "initial_prompt"):
             self.stt.initial_prompt = None
         await self._set_system_prompt(self.idle_prompt(), fresh=False)
@@ -370,17 +441,67 @@ class SessionRunner:
         self.machine.session_ended()
         logger.info("session: ended and reset; watching again")
 
-    async def speaker_changed(self) -> None:
-        """The voice print says somebody else is talking now (T14.3): end
-        the current visitor's session (goodbye + notes for them) and go
-        back to watching -- the face loop starts the newcomer's session
-        by itself, with identity resolved afresh. Nothing to do while
-        watching."""
+    async def speaker_changed(self, now: float | None = None) -> None:
+        """The voice print says somebody else is talking now (T14.3).
+
+        T15.1: the face is the arbiter. If the session's face was seen
+        within ``face_vouch_secs`` the voice is overruled (on 2026-09-04
+        a child's own French cost him his session twice) and the voice
+        check is re-armed. If a face is in frame but not yet judged, the
+        face check decides within ``swap_secs``. Only with nobody in
+        frame does the voice end the session (goodbye + notes for the
+        person who left); the face loop starts the newcomer's session by
+        itself. Nothing to do while watching."""
         if self.machine.state != ACTIVE:
             return
-        logger.info("session: speaker changed, ending %s's session",
-                    self.holder.learner.id if self.holder.learner else "the")
+        now = time.monotonic() if now is None else now
+        who = self.holder.learner.id if self.holder.learner else "the visitor"
+        if self._same_face_at is not None \
+                and now - self._same_face_at <= self.face_vouch_secs:
+            logger.info("session: voice says someone else, but %s's face was "
+                        "seen %.1fs ago; keeping the session", who,
+                        now - self._same_face_at)
+            if self.voice_identity is not None:
+                self.voice_identity.rearm()
+            return
+        if self._face_absent_since is None and self._presence == "face":
+            logger.info("session: voice says someone else; a face is there, "
+                        "leaving the verdict to the face check")
+            self._force_recheck = True
+            if self.voice_identity is not None:
+                self.voice_identity.rearm()
+            return
+        logger.info("session: speaker changed with nobody in frame, ending "
+                    "%s's session", who)
         await self.end_session()
+
+    def _check_identity(self, embedding, now: float) -> str:
+        """Mid-session recognition pass (T15.1): the largest face against
+        the face that started the session. Returns "same", "other",
+        "unsure" or "none"."""
+        from face import recognize
+        self._last_recheck = now
+        self._force_recheck = False
+        reference = self._session_face
+        if reference is None and self.holder.learner is not None:
+            reference = self.holder.learner.embedding
+        if reference is None or embedding is None:
+            return "none"
+        score = recognize.similarity(embedding, reference)
+        if score >= recognize.ACCEPT_THRESHOLD:
+            self._same_face_at = now
+            if self._other_since is not None:
+                logger.info("session: the session's face is back (score %.3f)",
+                            score)
+            self._other_since = None
+            return "same"
+        if score < recognize.REJECT_THRESHOLD:
+            if self._other_since is None:
+                self._other_since = now
+                logger.info("session: a different face is in front of the "
+                            "robot (score %.3f vs the session's face)", score)
+            return "other"
+        return "unsure"
 
     # -- the frame loop ----------------------------------------------------
 
@@ -408,58 +529,105 @@ class SessionRunner:
                         # done; a file source that ran out is absent
                         # forever (the simulated walk-away).
                         exhausted = True
+                now = time.monotonic()
                 if frame is None:
                     await asyncio.sleep(1.0 / self.fps)
                     face = None
-                elif self.machine.state == WATCHING:
+                elif self.machine.state == WATCHING or self._recheck_due(now):
                     face = await asyncio.to_thread(recognize.analyze, frame)
                 else:
-                    # Mid-session: position and presence only, never
-                    # identity (spec section 4A).
+                    # Between recognition passes: position and presence
+                    # only (the tracker, the walk-away timer).
                     face = await asyncio.to_thread(recognize.detect, frame)
-
-                now = time.monotonic()
-                present = face is not None
-                if present and self.machine.state == WATCHING \
-                        and face.embedding is not None:
-                    self._recent_vectors.append(face.embedding)
-                    self._recent_vectors = self._recent_vectors[-self.samples:]
-
-                # Voice presence (T13.2): the pipeline stamps note_voice()
-                # from another task; fold it into the machine here.
-                if self._voice_at is not None \
-                        and self._voice_at != self._voice_seen:
-                    self._voice_seen = self._voice_at
-                    self.machine.on_voice(self._voice_at)
-                    if not present and self.machine.state == ACTIVE:
-                        self._log_presence("voice")
-                if present:
-                    self._log_presence("face")
-
-                if self.tracker is not None:
-                    await self.tracker.maybe_resync()
-                    if present:
-                        h, w = frame.shape[:2]
-                        self.tracker.observe(face.bbox, w, h, now)
-                    else:
-                        self.tracker.relax(now)
-
-                advice = self.machine.on_face(present, now)
-                if advice == "start":
-                    await self.start_session(now)
-                elif advice == "ask":
-                    await self.ask_still_there()
-                elif advice == "end":
-                    await self.end_session()
-                elif self.machine.state == WATCHING \
-                        and self.attractor.on_face(present, now):
-                    name = random.choice(ATTRACT_MOVES)
-                    logger.info("attractor: nobody for %.0fs, playing %s",
-                                self.attractor.after_secs, name)
-                    await self._perform(name, LIBRARY[name].seconds)
+                await self.observe(face, now,
+                                   None if frame is None else frame.shape[:2])
         finally:
             if self.hub is None:
                 source.close()
+
+    def _recheck_due(self, now: float) -> bool:
+        """Mid-session: is it time to embed the face for identity again?
+        (T15.1: on the cadence, or at once after a gap or a voice doubt.)"""
+        return (self._force_recheck
+                or now - self._last_recheck >= self.face_recheck_secs)
+
+    async def observe(self, face, now: float, frame_shape=None) -> None:
+        """One observation: ``face`` is the largest face (with an
+        embedding when a recognition pass ran) or None. Everything the
+        frame loop decides happens here, so tests can drive it without a
+        camera."""
+        import random
+        from moves import ATTRACT_MOVES, LIBRARY
+
+        present = face is not None
+        if present and self.machine.state == WATCHING \
+                and face.embedding is not None:
+            self._recent_vectors.append(face.embedding)
+            self._recent_vectors = self._recent_vectors[-self.samples:]
+
+        # T15.1: identity for the whole session.
+        if self.machine.state == ACTIVE:
+            if present:
+                if self._face_absent_since is not None:
+                    gone = now - self._face_absent_since
+                    self._face_absent_since = None
+                    if gone >= 1.0 and face.embedding is None:
+                        # Somebody is back after a real gap: look at who,
+                        # on the very next frame.
+                        logger.info("session: a face is back after %.1fs "
+                                    "away, checking who", gone)
+                        self._force_recheck = True
+                if face.embedding is not None:
+                    verdict = self._check_identity(face.embedding, now)
+                    if verdict == "other" and self._other_since is not None \
+                            and now - self._other_since >= self.swap_secs:
+                        who = (self.holder.learner.id if self.holder.learner
+                               else "the visitor")
+                        logger.info("session: face swap -- someone else has "
+                                    "been in front of the robot for %.1fs, "
+                                    "ending %s's session", now -
+                                    self._other_since, who)
+                        await self.end_session()
+                        # the newcomer starts from these frames on
+                        self._face_absent_since = None
+                        present = False       # no walk-away bookkeeping
+            else:
+                if self._face_absent_since is None:
+                    self._face_absent_since = now
+                self._other_since = None
+
+        # Voice presence (T13.2): the pipeline stamps note_voice()
+        # from another task; fold it into the machine here.
+        if self._voice_at is not None \
+                and self._voice_at != self._voice_seen:
+            self._voice_seen = self._voice_at
+            self.machine.on_voice(self._voice_at)
+            if not present and self.machine.state == ACTIVE:
+                self._log_presence("voice")
+        if present:
+            self._log_presence("face")
+
+        if self.tracker is not None:
+            await self.tracker.maybe_resync()
+            if present and frame_shape is not None:
+                h, w = frame_shape
+                self.tracker.observe(face.bbox, w, h, now)
+            else:
+                self.tracker.relax(now)
+
+        advice = self.machine.on_face(present, now)
+        if advice == "start":
+            await self.start_session(now)
+        elif advice == "ask":
+            await self.ask_still_there()
+        elif advice == "end":
+            await self.end_session()
+        elif self.machine.state == WATCHING \
+                and self.attractor.on_face(present, now):
+            name = random.choice(ATTRACT_MOVES)
+            logger.info("attractor: nobody for %.0fs, playing %s",
+                        self.attractor.after_secs, name)
+            await self._perform(name, LIBRARY[name].seconds)
 
 
 class CloudBrain:

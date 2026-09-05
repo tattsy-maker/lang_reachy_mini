@@ -48,7 +48,11 @@ def test_decisions_use_the_recent_voice_not_the_session_mean(tmp_path):
         vid.on_sample(blend(john_voice, 0.9, seed=i))
     assert vid.verified
     rock_voice = unit(3)
-    assert vid.on_sample(rock_voice) is None, "one odd sample: wait"
+    # T15.2: four misses in a row, not two (a child's own French scored
+    # under the reject line on 1 in 3 samples on 2026-09-04).
+    for i in range(vid.change_after - 1):
+        assert vid.on_sample(blend(rock_voice, 0.95, seed=i)) is None, \
+            "too early to call a speaker change"
     assert vid.on_sample(blend(rock_voice, 0.95)) == "speaker_changed"
     assert vid.changed and holder.learner is john, \
         "the policy reports; the runner decides what to do"

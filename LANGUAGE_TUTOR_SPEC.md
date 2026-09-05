@@ -135,9 +135,16 @@ is close enough — otherwise the person is a stranger).
   booth closes for the day. The tier is a single flag in the profile; the
   experience is identical while it lasts.
 - **When it runs**: continuously between sessions (about twice per second,
-  watching for a face to appear), and once more at session start to confirm.
-  It does *not* run during conversation — the person is already identified,
-  and the GPU is busy with speech recognition.
+  watching for a face to appear), once more at session start to confirm,
+  and — since T15 (2026-09-04) — every couple of seconds *during* the
+  conversation as well, comparing the face in front of the robot with the
+  face that started the session. The original design paused recognition
+  mid-session; at the third family session one visitor took another's seat
+  and was tutored under her name for five minutes. The face is now the
+  arbiter of identity for the whole session: the same face keeps it alive
+  whatever the voice print says, a different face held for a few seconds
+  ends it (notes for the person who left) and starts the newcomer's own.
+  Recognition runs on the CPU, so it does not compete with speech.
 - **Match threshold**: we compare embeddings with cosine similarity and
   require a comfortable margin before claiming a match. When unsure, the
   robot asks — *"Maria, is that you?"* — rather than guessing. A wrong

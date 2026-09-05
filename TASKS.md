@@ -53,6 +53,7 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T12 | Cloud session lifecycle (watch / walk-away / reset over Gemini) | T8, T10 | done (as T14.3) | 2026-09-03 |
 | T13 | Family feedback round 1: goals, presence, tracking, showmanship | T11, T12 | in progress | 2026-09-02 |
 | T14 | Family feedback round 2: sight, calm tracking, one visitor at a time, longer dances | T13 | in progress | 2026-09-03 |
+| T15 | Family feedback round 3: identity for the whole session, one greeting, honest lag | T14 | in progress | 2026-09-04 |
 
 Parallelizable from the start (after T0): T1, T3, T5, T7 have no
 dependencies on each other. The critical path is
@@ -875,3 +876,89 @@ of the robot and each getting their own greeting, notes and wish.
   nothing to build. **Open**: in person — does the retuned tracker
   read as calm, does a family member swapping in mid-session trigger
   the speaker change within two sentences, do the 30 s dances please.
+
+## T15 — Family feedback round 3: identity for the whole session
+
+**Goal.** What the third family session (2026-09-04, cloud voice,
+everything from T14 on) asked for, with the log evidence in
+[progress/T15.md](progress/T15.md) and the debrief the family recorded
+afterwards. Logs in `booth/logs/2026-09-04_family/`.
+
+**What the log showed.** Yaroslav's lesson was ended twice by the voice
+print (his own French scored 0.20–0.45 against the print enrolled
+minutes earlier; the face said the same person throughout and
+re-recognized him five seconds later, so the goodbye ran straight into
+a "welcome back"). Tanya enrolled, a voice challenge downgraded her to
+"is that you?", somebody said yes, and from then on the voice check was
+off; when Yaroslav's father took her seat the robot tutored him under
+her name for five minutes, because the face is never looked at again
+after the greeting. Three greetings in fifteen seconds at every
+walk-up. The wish question never fired all day. "Comment dit-on
+'novel' en français" asked in French sounds silly. The prompt said
+the robot could not see while the `look` tool said it could.
+
+**Subtasks.**
+
+- **T15.1 — The face is the arbiter, for the whole session.**
+  `SessionRunner` embeds the largest face every `face_recheck_secs`
+  (2 s) during a session and compares it with the face that started
+  it; a voice mismatch while that face is present is ignored (and the
+  voice check re-armed); a different face held for `swap_secs` (3 s)
+  ends the session (goodbye + notes) and the newcomer starts theirs;
+  a face back after a gap is checked on the next frame. The frame loop
+  is now `observe(face, now)`, testable without a camera. Spec §A
+  updated. Tests: same face overrules the voice; swap after 3 s, not
+  after a glimpse; gap forces a recheck; voice with nobody in frame
+  still ends; live seat-swap clip over the cloud voice.
+- **T15.2 — The voice asks, never ends.** `change_after` 2 → 4;
+  samples under `decision_min_secs` (3 s) feed the print but are not
+  judged; `VoiceIdentity.rearm()`; the real-voice scores from the booth
+  logs recorded next to the thresholds. Calibration on the family's
+  recordings is still a to-do (needs them present).
+- **T15.3 — A yes is checked against the face.** `confirm_identity`
+  captures the current face and refuses when it is below the
+  recognizer's reject line (the model is told to ask their name and
+  treat them as new); on success it re-arms the voice check.
+  `face_confirms()` is the pure decision. Seam: `current_face`.
+- **T15.4 — Tell the robot where it is and what it can see.**
+  `VISION_FACE_LOOK` (the look tool exists, never claim blindness);
+  `BOOTH_NOTE` on every prompt the runner builds ("people swap seats");
+  the briefing's "Setting a task" rule (task in English below advanced,
+  never a one-word "how do you say" whose answer is in the question,
+  short role-play).
+- **T15.5 — One greeting.** `inference_on_context_initialization=False`
+  in session mode: pipecat seeds each connection with the prompt as a
+  user turn and, by default, has the model answer it -- that was the
+  greeting to an empty chair at startup and one of the three at every
+  walk-up. The runner's walk-up cue is the only greeting.
+- **T15.6 — Clean endings, the wish question on a real goodbye.**
+  The runner waits for the robot to finish speaking before the next
+  greeting (`speaking` seam, `Embodiment.bot_speaking`);
+  `save_session_notes` for a visitor still present answers with the
+  wish question to ask next (`wish_followup`, `holder.walkaway` /
+  `wish_recorded`).
+- **T15.7 — Measure the lag.** `turn: first sound Ns after the visitor
+  stopped speaking` per reply (local: pipecat's user-stopped frame;
+  cloud: the voice collector's energy gate). Tuning waits for numbers.
+- **T15.8 — Identity protocol for the next family session.** In the
+  booth checklist (`start_booth.sh`) and progress/T15.md; each row has
+  a simulated twin in `tests/t15/`.
+
+**Definition of Done.** `tests/run.sh t15` green (unit + live seat
+swap); the next family session run with people swapping seats
+mid-lesson and each getting their own greeting and notes, one greeting
+per walk-up, and `turn:` lines in the log.
+
+**Progress log.**
+- 2026-09-04 — task written from the third family session's logs and
+  the recorded debrief; T15.1–T15.7 built the same evening.
+- 2026-09-04 (late) — **T15.1–T15.7 green on the simulated path**
+  (`tests/run.sh t15`: 17 unit + 2 live; whole unmarked suite 127
+  passed). The live seat-swap clip over the cloud voice: swap caught in
+  4.1 s, goodbye + notes for the person who left, the newcomer greeted
+  once from a fresh Gemini session, nothing said before the first
+  walk-up. Its first run found two more holes (enrollment stored the
+  face present at call time; the goodbye was not yet playing when the
+  runner checked), both fixed. **Open**: the in-person protocol
+  (T15.8), real-voice calibration, `turn:` numbers on a real mic.
+

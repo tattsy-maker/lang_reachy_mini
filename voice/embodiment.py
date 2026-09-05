@@ -73,6 +73,21 @@ class Embodiment(FrameProcessor):
         # Presence hook (T13.2): the session runner counts the visitor's
         # speech as presence, so a talker out of frame is never timed out.
         self.on_user_speech = None
+        # T15.6/T15.7: is the robot talking right now (the session runner
+        # waits for a goodbye to finish before the next greeting), and
+        # the turn timer -- one ``turn: first sound Ns after the visitor
+        # stopped speaking`` line per reply, so "lag" can be measured
+        # instead of argued about. Local mode stamps the user-stopped
+        # moment from pipecat's frame; cloud mode (no such frames) gets it
+        # from the voice collector's energy gate via note_user_stopped().
+        self.bot_speaking = False
+        self._user_stopped_at: float | None = None
+
+    def note_user_stopped(self, when: float | None = None) -> None:
+        """The visitor just went quiet at ``when`` (loop/monotonic time;
+        now when omitted). The next bot speech closes the measurement."""
+        self._user_stopped_at = (asyncio.get_event_loop().time()
+                                 if when is None else when)
 
     @property
     def busy(self) -> bool:
@@ -104,6 +119,7 @@ class Embodiment(FrameProcessor):
     def _react(self, frame: Frame) -> None:
         if isinstance(frame, UserStartedSpeakingFrame):
             self._busy_since = asyncio.get_event_loop().time()
+            self._user_stopped_at = None
             if self.on_user_speech is not None:
                 try:
                     self.on_user_speech()
@@ -113,13 +129,21 @@ class Embodiment(FrameProcessor):
             self._posture(0.35, **ATTENTIVE)
 
         elif isinstance(frame, UserStoppedSpeakingFrame):
+            self.note_user_stopped()
             self._posture(0.3, **THINKING)
 
         elif isinstance(frame, BotStartedSpeakingFrame):
-            self._busy_since = asyncio.get_event_loop().time()
+            now = asyncio.get_event_loop().time()
+            self._busy_since = now
+            self.bot_speaking = True
+            if self._user_stopped_at is not None:
+                logger.info("turn: first sound %.2fs after the visitor "
+                            "stopped speaking", now - self._user_stopped_at)
+                self._user_stopped_at = None
             self._start_sway()
 
         elif isinstance(frame, BotStoppedSpeakingFrame):
+            self.bot_speaking = False
             self._stop_sway()
             self._posture(0.5, **RESTING)
             self._busy_since = None
