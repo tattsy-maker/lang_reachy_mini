@@ -972,6 +972,13 @@ the robot could not see while the `look` tool said it could.
   reference face, so a poor walk-up likeness does not leave a visitor
   in the unsure band for minutes. Tests: frame saver, check logging,
   reference strengthening.
+- **T15.11 — The base hunts after a recorded move.** Measured live
+  (progress/T15.md): after a dance the base servo limit-cycled ±0.5°
+  at 3.5 Hz around a target 1° away, for minutes, with nothing
+  commanding it; one interpolated goto to a clean body_yaw stopped it.
+  `reachy_target.play_move` now ends with a 0.6 s goto back to the
+  body yaw held before the move. Test: fake vendor object sees
+  play then goto(body_yaw=before).
 
 **Definition of Done.** `tests/run.sh t15` green (unit + live seat
 swap); the next family session run with people swapping seats
@@ -1001,4 +1008,7 @@ per walk-up, and `turn:` lines in the log.
   glasses": look frames kept on disk, every face check logged, the
   reference face strengthened by confident matches. `tests/run.sh t15`
   26 passed.
+- 2026-09-04 (night) — **T15.11**: the base oscillation was measured
+  live with the booth up: a servo limit cycle left behind by the dance,
+  not a command; fixed by settling the base after every recorded move.
 

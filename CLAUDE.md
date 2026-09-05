@@ -272,6 +272,13 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   present pose, so passing the held body_yaw with each head nudge
   twitched the base at ~2 Hz. `tests/t15/probe_body_twitch.py` measures
   it on the metal.
+- **The base twitching by itself after a dance** is the body servo
+  limit-cycling (±0.5°, 3.5 Hz) around a target it cannot reach once a
+  recorded move stops streaming; commanded values stay flat, so the
+  agent log shows nothing. `play_move` now ends with a settling goto
+  (T15.11). To check live without disturbing a session, poll
+  `report_status` over zenoh and compare measured vs commanded
+  body_yaw; if measured wobbles and commanded is flat, it is the servo.
 - **What did it see?** Every `look` frame is saved under
   `booth/logs/looks/<date>/` (the `look:` log line names the file), and
   every mid-session face check logs `session: face check: same|unsure|

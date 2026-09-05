@@ -472,6 +472,8 @@ class ReachyMiniTarget:
                                  if m.dataset)))
         mini = self._require()
         move = self._recorded_move(spec.dataset, spec.move)
+        with self._lock:
+            body_before = self._cmd["body_yaw"]
         try:
             # 1.0 s to the move's first frame (was 0.4): a dance called
             # with the head turned 30 deg by the tracker used to snap.
@@ -480,6 +482,19 @@ class ReachyMiniTarget:
             self.refresh()
             with self._lock:
                 self._cmd.update(self._measured)
+            # T15.11: settle the base. A recorded move streams its last
+            # frame and stops; measured on 2026-09-04 (20:40), the base
+            # servo was then left limit-cycling +-0.5 deg at 3.5 Hz around
+            # a target 1 deg away that it could not reach, for minutes,
+            # with the head at rest -- and one ordinary goto to a clean
+            # body_yaw ended it at once. So every move ends with a short
+            # interpolated goto back to the body yaw held before it.
+            try:
+                mini.goto_target(body_yaw=float(body_before), duration=0.6)
+                with self._lock:
+                    self._cmd["body_yaw"] = float(body_before)
+            except Exception as exc:                    # noqa: BLE001
+                logger.warning("post-move body settle failed: %s", exc)
         with self._lock:
             return dict(self._cmd)
 

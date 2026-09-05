@@ -102,6 +102,44 @@ def test_target_goto_interpolates_only_the_named_groups(paths):
     assert "target-ok" in out
 
 
+def test_a_recorded_move_ends_with_a_body_settle(paths):
+    """T15.11: measured live, the base servo hunts after a move until it
+    gets a clean interpolated target; every play_move now ends with one."""
+    if not paths.robot_py.exists():
+        pytest.skip("./.venv missing")
+    out = run_in(paths.robot_py, """
+        import sys, threading
+        sys.path.insert(0, ".")
+        import reachy_target
+        from reachy_target import ReachyMiniTarget
+
+        class Mini:
+            def __init__(self): self.calls = []
+            def play_move(self, move, **kw): self.calls.append(("play", move, kw))
+            def goto_target(self, **kw): self.calls.append(("goto", kw))
+            def set_target(self, **kw): self.calls.append(("set", kw))
+
+        t = ReachyMiniTarget.__new__(ReachyMiniTarget)
+        t._lock = threading.RLock()
+        t._cmd = {n: 0.0 for n in reachy_target.DOF_NAMES}
+        t._cmd["body_yaw"] = 0.25
+        t._measured = dict(t._cmd, body_yaw=0.27, head_yaw=0.1)   # where the move left it
+        mini = Mini()
+        t._require = lambda: mini
+        t._recorded_move = lambda dataset, move: "the-move"
+        t.refresh = lambda: None
+        posture = t.play_move("dance")
+        kinds = [c[0] for c in mini.calls]
+        assert kinds == ["play", "goto"], mini.calls
+        assert mini.calls[0][2]["initial_goto_duration"] == 1.0
+        settle = mini.calls[1][1]
+        assert settle["body_yaw"] == 0.25 and settle["duration"] == 0.6, settle
+        assert posture["body_yaw"] == 0.25 and posture["head_yaw"] == 0.1
+        print("settle-ok")
+    """, paths.repo)
+    assert "settle-ok" in out
+
+
 @pytest.mark.models
 def test_embodiment_holds_and_tools_skip_during_a_dance(paths):
     out = run_in(paths.voice_py, """
