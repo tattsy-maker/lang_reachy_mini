@@ -1064,5 +1064,9 @@ enrolls to learn English and hears Russian explanations.
 
 **Progress log.**
 - 2026-09-04 (night) — **T16.1–T16.4** built and green on the simulated
-  path; the whole unmarked suite still passes. Open: the first live
-  Russian-native session.
+  path; the whole unmarked suite still passes (143). The full suite with
+  live tests: 190 passed, 2 failed, both pre-existing (a t6 round-trip
+  flake and t14's two-visit cloud test losing a race with Gemini's
+  reconnect; the same failure on the pre-T16 commit -- see
+  progress/T16.md "Verified"). Open: the first live Russian-native
+  session.
