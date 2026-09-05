@@ -472,14 +472,34 @@ class ReachyMiniDriver(DeviceDriver):
             except (asyncio.CancelledError, Exception):     # noqa: BLE001
                 pass
 
+    # Kinds that may interrupt a recorded move. Everything else (a posture
+    # nudge, a nod, a look) is refused while one plays: on 2026-09-04 the
+    # voice agent's talking sway cancelled every dance within about a
+    # second, and a head turn 8 ms after a cheer produced a jerk that
+    # nearly toppled the robot (T15.9).
+    INTERRUPTS_MOVES = ("play_move", "home", "sleep", "wake_up")
+
     async def _begin(self, kind: str, detail: Dict[str, Any], runner
                      ) -> Dict[str, Any]:
         """Accept a motion, start it in the background, and return its id.
 
         Supersedes whatever was running: a new gesture beats a stale one, which
         is what makes conversational motion compose instead of queueing.
+        The one exception is a recorded move (``play_move``): it drives the
+        whole body from its own trajectory, so only another move, ``home``,
+        ``sleep``, ``wake_up`` or ``cancel_motion`` may cut it short; a
+        nudge that arrives while it plays is refused with ``accepted=False``
+        and the move plays on.
         """
         self._guard()
+        m = self._motion
+        if (m is not None and m["status"] == "running"
+                and m.get("kind") == "play_move"
+                and kind not in self.INTERRUPTS_MOVES):
+            return {"accepted": False, "kind": kind,
+                    "reason": "a recorded move is playing; wait for its "
+                              "motion_completed or call cancel_motion",
+                    "running": m["motion_id"]}
         await self._abort_motion("superseded by %s" % kind)
 
         motion_id = "m-%s" % uuid.uuid4().hex[:10]

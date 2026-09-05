@@ -24,6 +24,7 @@ other. Keep that split if you add gestures: pick DOFs the LLM tools don't drive.
 from __future__ import annotations
 
 import asyncio
+import math
 import logging
 import random
 
@@ -82,6 +83,18 @@ class Embodiment(FrameProcessor):
         # from the voice collector's energy gate via note_user_stopped().
         self.bot_speaking = False
         self._user_stopped_at: float | None = None
+        # T15.9: while a recorded move plays, embodiment sends nothing --
+        # its talking sway used to supersede every dance within a second.
+        self._hold_until = -math.inf
+
+    def hold(self, seconds: float) -> None:
+        """Send no postures for ``seconds`` (a recorded move owns the body)."""
+        self._hold_until = max(self._hold_until,
+                               asyncio.get_event_loop().time() + seconds)
+
+    @property
+    def holding(self) -> bool:
+        return asyncio.get_event_loop().time() < self._hold_until
 
     def note_user_stopped(self, when: float | None = None) -> None:
         """The visitor just went quiet at ``when`` (loop/monotonic time;
@@ -98,6 +111,8 @@ class Embodiment(FrameProcessor):
         return (asyncio.get_event_loop().time() - self._busy_since) < 20.0
 
     def _posture(self, duration: float, **dofs: float) -> None:
+        if self.holding:
+            return
         if "head_pitch" in dofs:
             dofs["head_pitch"] = dofs["head_pitch"] + self.pitch_bias
         self._robot.posture(duration=duration, **dofs)

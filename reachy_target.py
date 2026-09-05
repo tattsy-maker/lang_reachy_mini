@@ -327,12 +327,23 @@ class ReachyMiniTarget:
                 self._cmd[name] = clamp(name, value)
             c = dict(self._cmd)
 
-        head = pose_to_matrix(c["head_x"], c["head_y"], c["head_z"],
-                              c["head_roll"], c["head_pitch"], c["head_yaw"])
+        # Interpolate only the groups the caller named (T15.9). The vendor's
+        # goto re-plans every group it is given from the *present* pose, so
+        # passing the held body_yaw with every head nudge re-drove the base
+        # servo from wherever it sat to the held target about twice a
+        # second -- the 2026-09-04 "base oscillating at ~2 Hz". None means
+        # "keep the current value" on the vendor side.
+        asked = set(dofs)
+        head_asked = bool(asked & {"head_x", "head_y", "head_z", "head_roll",
+                                   "head_pitch", "head_yaw"})
+        antennas_asked = bool(asked & {"antenna_left", "antenna_right"})
+        head = (pose_to_matrix(c["head_x"], c["head_y"], c["head_z"],
+                               c["head_roll"], c["head_pitch"], c["head_yaw"])
+                if head_asked else None)
         mini.goto_target(
             head=head,
-            antennas=_antennas_wire(c),
-            body_yaw=c["body_yaw"],
+            antennas=_antennas_wire(c) if antennas_asked else None,
+            body_yaw=c["body_yaw"] if "body_yaw" in asked else None,
             duration=max(0.01, float(duration)),
         )
         return c
@@ -462,7 +473,9 @@ class ReachyMiniTarget:
         mini = self._require()
         move = self._recorded_move(spec.dataset, spec.move)
         try:
-            mini.play_move(move, sound=False, initial_goto_duration=0.4)
+            # 1.0 s to the move's first frame (was 0.4): a dance called
+            # with the head turned 30 deg by the tracker used to snap.
+            mini.play_move(move, sound=False, initial_goto_duration=1.0)
         finally:
             self.refresh()
             with self._lock:

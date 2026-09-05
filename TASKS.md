@@ -943,6 +943,24 @@ the robot could not see while the `look` tool said it could.
 - **T15.8 — Identity protocol for the next family session.** In the
   booth checklist (`start_booth.sh`) and progress/T15.md; each row has
   a simulated twin in `tests/t15/`.
+- **T15.9 — Recorded moves own the body; gotos touch only what they
+  name (from the 2026-09-04 evening run).** The driver refuses any
+  nudge (`goto_posture`, `nod`, `shake`, `look_at`) while a `play_move`
+  runs -- only another move, `home`, `sleep`, `wake_up` or
+  `cancel_motion` may cut it; before this the embodiment's talking
+  sway superseded every dance within ~1 s, and a `move_head` 8 ms
+  after a cheer was the head jerk. The embodiment is held quiet and
+  the other motion tools answer "skipped" for the move's duration; the
+  vendor's initial goto to a move's first frame is 1.0 s (was 0.4).
+  `reachy_target.goto` passes only the joint groups the caller named,
+  so a head nudge no longer re-drives the base servo from its present
+  position to the held target (the ~2 Hz base twitch; probe in
+  `tests/t15/probe_body_twitch.py`). Also the false-goodbye chain:
+  `save_session_notes` takes `farewell`, the wish follow-up needs it,
+  and the briefing/persona say that teaching the word goodbye (or a
+  dance request) is not the student leaving. Tests: driver refusal on
+  the stub, goto groups on a fake vendor object, embodiment hold and
+  tool skips in the voice venv, farewell gating and prompt text.
 
 **Definition of Done.** `tests/run.sh t15` green (unit + live seat
 swap); the next family session run with people swapping seats
@@ -961,4 +979,11 @@ per walk-up, and `turn:` lines in the log.
   face present at call time; the goodbye was not yet playing when the
   runner checked), both fixed. **Open**: the in-person protocol
   (T15.8), real-voice calibration, `turn:` numbers on a real mic.
+- 2026-09-04 (evening, on metal) — first booth run on T15: one
+  greeting, the face recheck and the `turn:` line (1.3–2.7 s) all
+  showed; three new faults seen live and fixed as **T15.9** the same
+  night (see progress/T15.md "Seen live"): head jerks and one-second
+  dances (both: anything superseded a recorded move), a base twitch at
+  ~2 Hz (every goto re-drove the body servo), and a goodbye nobody said
+  that then triggered the wish question twice.
 

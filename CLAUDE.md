@@ -259,6 +259,19 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   `inference_on_context_initialization=False`; the walk-up cue is the
   only greeting. A hand-started cloud run (no `--session`) keeps the
   default so the robot still greets first.
+- **A recorded move owns the body (T15.9).** While `play_move` runs the
+  driver refuses every nudge (`accepted=False`, "a recorded move is
+  playing"); only another move, `home`, `sleep`, `wake_up` or
+  `cancel_motion` interrupts it. The agent holds embodiment and the
+  motion tools for the move's length. Before this, the talking sway cut
+  every dance to about a second and a head turn 8 ms after a cheer was
+  a jerk that nearly toppled the robot (2026-09-04).
+- **`goto` moves only the joints it names.** `reachy_target.goto`
+  passes None for any group (head, antennas, body_yaw) the caller did
+  not mention; the vendor re-plans every group it is given from the
+  present pose, so passing the held body_yaw with each head nudge
+  twitched the base at ~2 Hz. `tests/t15/probe_body_twitch.py` measures
+  it on the metal.
 - **Lag has a number now.** `grep "turn: first sound" voice/run.log`
   gives visitor-stop → first sound per reply (cloud: from the voice
   collector's energy gate, so ±0.8 s). Measure before tuning.

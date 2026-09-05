@@ -289,6 +289,21 @@ def test_wish_followup_only_when_present_and_unasked():
     assert wish_followup(holder, ask_wish=True) is None, "no question to an empty chair"
     holder.reset()
     assert holder.walkaway is False and wish_followup(holder, True)
+    # T15.9: notes saved for a reason other than a farewell (the lesson
+    # was about the word goodbye) must not produce a parting question
+    assert wish_followup(holder, True, farewell=False) is None
+    assert "do not ask it again" in wish_followup(holder, True, farewell=True)
+
+
+def test_briefing_and_persona_say_teaching_goodbye_is_not_leaving(tmp_path):
+    from tutor_mode import build_persona
+    store = LearnerStore(tmp_path / "learners")
+    text = build_briefing(store.create("Alex", "zh"), "")
+    assert "words for goodbye is not Alex leaving" in text
+    assert "request for a dance" in text
+    persona = build_persona("booth")
+    assert "not a lesson about the word" in persona
+    assert "never ask it twice" in persona
 
 
 def test_end_session_raises_the_walkaway_flag_while_closing(tmp_path):

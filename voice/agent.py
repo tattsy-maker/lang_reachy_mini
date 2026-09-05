@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import time
 import contextlib
 import logging
 import math
@@ -339,11 +340,26 @@ def build_audio_tools() -> list:
     )]
 
 
-def build_tools(robot: RobotLink, tracker: FaceTracker | None = None) -> list:
+def build_tools(robot: RobotLink, tracker: FaceTracker | None = None,
+                embodiment=None) -> list:
     """The motion tools. With a face tracker (T13.3) a deliberate head or
     body move suspends tracking for a few seconds and tells the tracker
-    where it put the robot, so the two never fight over yaw."""
+    where it put the robot, so the two never fight over yaw. While a
+    recorded move plays (T15.9) the other motion tools answer "skipped"
+    instead of sending anything, and the embodiment is held quiet: the
+    move owns the whole body, and the driver would refuse the nudge
+    anyway."""
     from moves import LIBRARY, describe as describe_moves
+
+    moving = {"until": -math.inf, "name": None}
+
+    def dance_in_progress() -> dict | None:
+        if time.monotonic() < moving["until"]:
+            return {"skipped": True,
+                    "reason": f"the {moving['name']} move is still playing and "
+                              "moves the whole body; no other motion until "
+                              "it ends. Just keep talking."}
+        return None
 
     def deliberate(seconds: float, **dofs: float) -> None:
         if tracker is not None:
@@ -352,6 +368,9 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None) -> list:
                 tracker.set_estimate(**dofs)
 
     async def move_head(params):
+        if (busy := dance_in_progress()):
+            await params.result_callback(busy)
+            return
         a = params.arguments
         dofs = {}
         if a.get("yaw_degrees") is not None:
@@ -370,6 +389,9 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None) -> list:
         await params.result_callback({"moving": True, **dofs})
 
     async def turn_body(params):
+        if (busy := dance_in_progress()):
+            await params.result_callback(busy)
+            return
         a = params.arguments
         duration = float(a.get("duration", 1.0))
         body_yaw = math.radians(float(a["degrees"]))
@@ -392,22 +414,37 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None) -> list:
         passes = spec.passes_for(seconds)
         total = spec.seconds * passes
         robot.perform(spec.name, repeat=passes)
+        # 1 s for the vendor's initial goto to the first frame, 1 s slack.
+        moving["until"] = time.monotonic() + total + 2.0
+        moving["name"] = spec.name
         if tracker is not None:
-            tracker.suspend(total + 1.0, stale=True)
+            tracker.suspend(total + 2.0, stale=True)
+        if embodiment is not None:
+            embodiment.hold(total + 2.0)
         logger.info("perform: %s x%d (%.0fs)", spec.name, passes, total)
         await params.result_callback(
             {"performing": spec.name, "seconds": total,
-             "note": "keep talking while it plays"})
+             "note": "keep talking while it plays; no other movement "
+                     "until it ends"})
 
     async def nod(params):
+        if (busy := dance_in_progress()):
+            await params.result_callback(busy)
+            return
         robot.nod(times=int(params.arguments.get("times", 2)))
         await params.result_callback({"nodding": True})
 
     async def shake_head(params):
+        if (busy := dance_in_progress()):
+            await params.result_callback(busy)
+            return
         robot.shake(times=int(params.arguments.get("times", 2)))
         await params.result_callback({"shaking": True})
 
     async def wiggle_antennas(params):
+        if (busy := dance_in_progress()):
+            await params.result_callback(busy)
+            return
         # A quick flick out and back. Fire-and-forget so speech continues.
         robot.posture(duration=0.25, antenna_left=1.3, antenna_right=-1.3)
         await asyncio.sleep(0.3)
@@ -1120,7 +1157,8 @@ emit the tool call in that same turn, alongside anything you say.""".format(
     # Each FunctionSchema carries its own handler, so pipecat dispatches
     # straight from the schema. Calling register_function() as well is
     # redundant and pipecat warns about it.
-    tools = (build_tools(robot, tracker) if robot else []) + build_audio_tools()
+    tools = ((build_tools(robot, tracker, embodiment) if robot else [])
+             + build_audio_tools())
 
     # Tutor mode: append the right briefing to the system prompt and
     # register the memory (and, with a face source, enrollment) tools next

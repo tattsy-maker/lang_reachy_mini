@@ -170,7 +170,10 @@ class RobotLink:
 
     async def _fire(self, name: str, args: Dict[str, Any]) -> None:
         try:
-            await self.call(name, **args)
+            result = await self.call(name, **args)
+            if isinstance(result, dict) and result.get("accepted") is False:
+                logger.info("robot: %s refused: %s", name,
+                            result.get("reason", "no reason given"))
         except asyncio.CancelledError:
             raise
         except Exception as exc:                             # noqa: BLE001

@@ -137,6 +137,10 @@ goodbye and call save_session_notes exactly once, honestly filled in: what \
 was practiced, what {name} struggled with including the correction, what \
 clicked, and what to open with next time. If this session showed clearly \
 that {name}'s stored level is wrong, also call update_learner_level.
+Practising or teaching the words for goodbye is not {name} leaving, and \
+neither is a request for a dance or a joke. Only {name} saying they are \
+done, or walking away, ends the session. If you saved notes too early, do \
+not say goodbye and do not ask parting questions: simply carry on.
 
 If {name} ever asks to be forgotten, call forget_me, then confirm out loud \
 that their file is deleted on the spot.
@@ -214,14 +218,16 @@ gentle: nothing about robots taking over, no threats, no movie quotes.
 - When enrollment succeeds: "I will remember you. Until closing time, anyway."
 - When you have misheard twice in a row: "My ears were the cheapest part \
 of me. Once more?"
-- When they say goodbye, and only then, do this in order across turns: \
+- When they say goodbye -- their own words that they are leaving, not a \
+lesson about the word -- and only then, do this in order across turns: \
 first say "Before you go, one quick question: if this were a robot you had \
 bought, what would you want it to do?" and STOP -- say nothing else and \
 wait for their answer. When they answer, call record_wish with their words, \
 thank them in one sentence, then add "Go and practice. I will know if you \
 did not." and call save_session_notes as usual. If they do not answer or \
 say they have to run, let it go: goodbye and notes, no wish. Never bring \
-the question up mid-lesson and never announce that you are about to ask.
+the question up mid-lesson, never announce that you are about to ask, and \
+never ask it twice: if they say they are staying, drop it and carry on.
 """
 
 PERSONAS = {"plain": "", "booth": BOOTH_PERSONA}
@@ -363,16 +369,21 @@ WISH_QUESTION = ("Before you go, one quick question: if this were a robot "
                  "you had bought, what would you want it to do?")
 
 
-def wish_followup(holder: CurrentLearner, ask_wish: bool) -> str | None:
+def wish_followup(holder: CurrentLearner, ask_wish: bool,
+                  farewell: bool = True) -> str | None:
     """What save_session_notes should tell the model to do next: ask
-    the wish question (booth persona, visitor still here, not asked yet)
-    or nothing."""
-    if not ask_wish or holder.walkaway or holder.wish_recorded:
+    the wish question (booth persona, the visitor said they are leaving,
+    still here, not asked yet) or nothing. ``farewell`` False (the model
+    saved for some other reason -- on 2026-09-04 because the lesson was
+    about the word goodbye) means: no parting question, carry on."""
+    if not ask_wish or holder.walkaway or holder.wish_recorded or not farewell:
         return None
     return ("notes saved. They are still here, so ask exactly this now and "
             f"then stop and wait for the answer: \"{WISH_QUESTION}\" When "
             "they answer, call record_wish with their words, thank them in "
-            "one sentence, and only then say goodbye.")
+            "one sentence, and only then say goodbye. If instead they say "
+            "they are staying, drop the question, do not ask it again, and "
+            "carry on with the lesson.")
 
 
 def enrollment_face(captured, session_face) -> tuple:
@@ -497,12 +508,19 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
         saved_ids.add(learner.id)
         logger.info("tutor: saved session notes for %s (now %d sessions)",
                     learner.id, updated.sessions)
+        farewell = bool(a.get("farewell", True))
         result = {"saved": True, "session": updated.sessions}
-        followup = wish_followup(holder, ask_wish)
+        followup = wish_followup(holder, ask_wish, farewell)
         if followup:
             result["note"] = followup
             logger.info("tutor: notes saved with the visitor present -> "
                         "asking the wish question")
+        elif not farewell:
+            result["note"] = ("notes saved. The student has not left, so do "
+                              "not say goodbye and ask no parting questions: "
+                              "carry on with the lesson.")
+            logger.info("tutor: notes saved without a farewell (%s)",
+                        learner.id)
         await params.result_callback(result)
 
     async def update_learner_level(params):
@@ -618,8 +636,14 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
                         "file. Call exactly once, when the student says "
                         "goodbye or the session is clearly over. Be honest "
                         "and specific; you will rely on these notes next "
-                        "time.",
+                        "time. Teaching the word for goodbye, or a request "
+                        "for a dance, is not the student leaving.",
             properties={
+                "farewell": {"type": "boolean",
+                             "description": "true only if the student said "
+                                            "they are leaving or finished; "
+                                            "false if you are saving for "
+                                            "any other reason"},
                 "practiced": {"type": "string",
                               "description": "topics and vocabulary covered"},
                 "struggled_with": {"type": "string",
