@@ -12,8 +12,12 @@
 #                       voice, T14.3) or local (Whisper + Claude + Kokoro)
 #   BOOTH_MODEL         LLM for the tutor in local mode (default
 #                       claude-haiku-4-5-20251001; home runs Opus)
-#   BOOTH_AUDIO_DEVICE  substring of the mic/speaker device (default the
-#                       robot's own; T11 mic test decides the handheld name)
+#   BOOTH_MIC_DEVICE    substring of the preferred USB microphone (default
+#                       "USB Composite Device", the Jieli desk mic). When no
+#                       such device is plugged in, the robot's built-in mic
+#                       is used; the agent log says which one it opened.
+#   BOOTH_AUDIO_DEVICE  substring of the robot's speaker device (default
+#                       "Reachy Mini Audio"); also the fallback mic
 #   BOOTH_FACE_SOURCE   camera for face recognition (default 0 = /dev/video0)
 #   BOOTH_ABSENT_SECS   walk-away timer (default 60; "still there?" at 2/3)
 #   BOOTH_ATTRACT_SECS  idle attractor: nobody in frame this long -> a short
@@ -31,6 +35,7 @@ cd "$(dirname "$0")"
 SPEECH="${BOOTH_SPEECH:-cloud}"
 MODEL="${BOOTH_MODEL:-claude-haiku-4-5-20251001}"
 AUDIO_DEVICE="${BOOTH_AUDIO_DEVICE:-Reachy Mini Audio}"
+MIC_DEVICE="${BOOTH_MIC_DEVICE:-USB Composite Device}"
 FACE_SOURCE="${BOOTH_FACE_SOURCE:-0}"
 ABSENT_SECS="${BOOTH_ABSENT_SECS:-60}"
 ATTRACT_SECS="${BOOTH_ATTRACT_SECS:-120}"
@@ -61,6 +66,13 @@ else
 fi
 grep -qs . /proc/asound/cards && ok "sound card visible" \
     || die "no sound card (audio group membership? see CLAUDE.md)"
+# USB mic if present, else the robot's own. /proc/asound/cards names the
+# cards the same way PyAudio does, so this preview matches the agent's pick.
+if [ -n "$MIC_DEVICE" ] && grep -qsi -- "$MIC_DEVICE" /proc/asound/cards; then
+    ok "USB mic present ($MIC_DEVICE) -- using it"
+else
+    warn "no USB mic matching '$MIC_DEVICE' -- using the robot's built-in mic"
+fi
 
 SESSION_FLAGS=(--session --face-source "$FACE_SOURCE"
                --absent-secs "$ABSENT_SECS" --attract-secs "$ATTRACT_SECS")
@@ -128,6 +140,7 @@ voice/.venv/bin/python voice/agent.py \
     --broker "$BROKER" \
     "${MODEL_FLAGS[@]}" \
     --audio-device "$AUDIO_DEVICE" \
+    --mic-device "$MIC_DEVICE" \
     --persona "$PERSONA" \
     "${SESSION_FLAGS[@]}" \
     ${BOOTH_EXTRA_AGENT:-} \
@@ -178,6 +191,6 @@ say "  * walk up: greeted (by name if enrolled) within ~3s of a stable face?"
 say "  * step left/right: head and body follow? 'can you dance?' -> a dance?"
 say "  * walk-away: 'still there?' at ${ABSENT_SECS}*2/3 s, goodbye + notes at ${ABSENT_SECS}s"
 say "  * demo insurance: kill and rerun with BOOTH_EXTRA_AGENT='--say \"...\"'"
-say "  * signage up (booth/SIGNAGE.md), one chair, one mic"
+say "  * signage up (booth/SIGNAGE.md), one chair, one mic (grep 'audio: mic' $AGENT_LOG)"
 say "Ctrl-C stops everything and wipes guest profiles."
 wait "$AGENT_PID"

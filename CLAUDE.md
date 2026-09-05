@@ -141,7 +141,10 @@ what the last session's log showed.
 Knobs: `BOOTH_SPEECH` (`cloud` default since T14.3, `local` for
 Claude), `BOOTH_ABSENT_SECS` (walk-away timer, "still there?" at two
 thirds), `BOOTH_ATTRACT_SECS` (idle dance; 0 = off), `BOOTH_PERSONA`
-(`booth` default, `plain` for none). Face tracking, voice prints and
+(`booth` default, `plain` for none), `BOOTH_MIC_DEVICE` (preferred USB
+mic, default `USB Composite Device`; when it is not plugged in the
+robot's own mic is used -- see the two-mics trap below). Face tracking,
+voice prints and
 the `look` tool are on by default with a camera. Visitors swap without
 anyone touching the keyboard: a walk-away or a changed voice ends the
 session and the next face starts a fresh one (fresh Gemini history).
@@ -177,7 +180,9 @@ wishlist question; the booth script passes booth) · `--no-track` (face
 tracking is on whenever there is a camera and a robot, T13.3) ·
 `--attract-secs S` (session mode: idle dance after S s with nobody in
 frame, T13.4) · `--wishes-file PATH` · `--no-voice-id` (voice prints are
-on in tutor mode, T13.9) · `--voice-source WAV` (testing: hear this file
+on in tutor mode, T13.9) · `--mic-device NAME[,NAME]` (preferred mic
+substrings tried in order, default the USB desk mic, falling back to the
+`--audio-device` mic; 2026-09-04) · `--voice-source WAV` (testing: hear this file
 as the visitor at each `--say`). Tools the model can call besides
 motion: `save_session_notes`, `update_learner_level`, `set_learner_goal`,
 `set_target_language`, `forget_me`, `enroll_new_learner`,
@@ -222,6 +227,14 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   slice of `voice/run.log` and `serve.log` into `booth/logs/<date>_<name>/`
   (gitignored). The append-only logs are the only record of what
   happened; the 2026-09-03 session lives there.
+- **Two mics, two sample rates.** The USB desk mic (`USB Composite
+  Device`, Jieli, card 2) only opens at 48 kHz; the robot's own mic only
+  at 16 kHz -- PortAudio answers `Invalid sample rate` to the other. The
+  agent picks the USB mic when it is plugged in, else the robot's, opens
+  it at its own rate and resamples to the pipeline's 16 kHz
+  (`ResamplingAudioInput` in `voice/agent.py`). The speaker is always
+  the robot's. `grep 'audio: mic' voice/run.log` says which mic a run
+  got; `--input-device N` forces one. Both paths measured 2026-09-04.
 - **Speaker volume:** the mixer default is quiet; the booth script and
   `set_volume` use `amixer -c <card> sset PCM,0 N%`.
 - **One camera, one opener.** `/dev/video0` cannot be streamed by two

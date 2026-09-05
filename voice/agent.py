@@ -82,7 +82,9 @@ from pipecat.turns.user_stop import (                                   # noqa: 
 from pipecat.turns.user_turn_strategies import UserTurnStrategies       # noqa: E402
 from pipecat.services.anthropic.llm import AnthropicLLMService          # noqa: E402
 from pipecat.services.whisper.stt import MLXModel, WhisperSTTServiceMLX  # noqa: E402
+from pipecat.transports.base_input import BaseInputTransport          # noqa: E402
 from pipecat.transports.local.audio import (                            # noqa: E402
+    LocalAudioInputTransport,
     LocalAudioTransport,
     LocalAudioTransportParams,
 )
@@ -119,6 +121,14 @@ from tutor_mode import (                                                # noqa: 
     voice_cue,
 )
 from tracking import FaceTracker, TrackingLoop                          # noqa: E402
+from audio_devices import (                                             # noqa: E402
+    MIC_DEVICE_NAME,
+    SPEAKER_DEVICE_NAME,
+    choose_audio_devices,
+    input_rate_for,
+    list_audio_devices,
+    parse_mic_prefs,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
@@ -127,7 +137,7 @@ logger = logging.getLogger("agent")
 DEFAULT_BROKER = "zenoh://"
 DEFAULT_DEVICE_ID = "reachy-mini-1"
 DEFAULT_TENANT = "lab"
-AUDIO_DEVICE_NAME = "Reachy Mini Audio"
+AUDIO_DEVICE_NAME = SPEAKER_DEVICE_NAME
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ENV_FILE = os.path.join(_HERE, ".env")
 
@@ -741,23 +751,122 @@ async def warm_up(stt, tts, sample_rate: int) -> None:
 # Audio device selection
 # ---------------------------------------------------------------------------
 
-def find_audio_device(name_fragment: str) -> tuple[int | None, int | None]:
-    """Return (input_index, output_index) for the first device matching a name."""
-    try:
-        import pyaudio
-    except ImportError:
-        return None, None
-    pa = pyaudio.PyAudio()
-    try:
-        want = name_fragment.lower()
-        for i in range(pa.get_device_count()):
-            d = pa.get_device_info_by_index(i)
-            if want in str(d["name"]).lower():
-                return (i if d["maxInputChannels"] > 0 else None,
-                        i if d["maxOutputChannels"] > 0 else None)
-        return None, None
-    finally:
-        pa.terminate()
+class ResamplingAudioInput(LocalAudioInputTransport):
+    """PyAudio input opened at the device's own rate, resampled to the pipeline's.
+
+    The stock transport opens the mic at the pipeline rate (16 kHz), which
+    the USB booth mic refuses (PortAudio: "Invalid sample rate"; it only
+    does 48 kHz), while everything downstream -- Silero VAD, Whisper,
+    Gemini Live, the voice-print collector -- was built and measured at
+    16 kHz. So: open at ``device_rate``, resample each 20 ms callback
+    chunk with a streaming soxr resampler (keeps history across chunks,
+    so no clicks at the edges), and push the frame at the pipeline rate.
+    With equal rates it is the stock transport.
+    """
+
+    def __init__(self, py_audio, params, device_rate: int):
+        super().__init__(py_audio, params)
+        self._device_rate = device_rate
+        self._resampler = None
+
+    async def start(self, frame: StartFrame):
+        # BaseInputTransport.start on purpose: the direct parent's start()
+        # is exactly the open-at-pipeline-rate we are replacing.
+        await BaseInputTransport.start(self, frame)
+        if self._in_stream:
+            return
+        self._sample_rate = (self._params.audio_in_sample_rate
+                             or frame.audio_in_sample_rate)
+        channels = self._params.audio_in_channels
+        if self._device_rate != self._sample_rate:
+            import soxr
+            self._resampler = soxr.ResampleStream(
+                self._device_rate, self._sample_rate, channels,
+                dtype="int16", quality="HQ")
+        num_frames = int(self._device_rate / 100) * 2  # 20 ms of audio
+        self._in_stream = self._py_audio.open(
+            format=self._py_audio.get_format_from_width(2),
+            channels=channels,
+            rate=self._device_rate,
+            frames_per_buffer=num_frames,
+            stream_callback=self._audio_in_callback,
+            input=True,
+            input_device_index=self._params.input_device_index,
+        )
+        self._in_stream.start_stream()
+        await self.set_transport_ready(frame)
+
+    def _audio_in_callback(self, in_data, frame_count, time_info, status):
+        if self._resampler is not None:
+            import numpy as np
+            samples = np.frombuffer(in_data, dtype=np.int16)
+            channels = self._params.audio_in_channels
+            if channels > 1:
+                samples = samples.reshape(-1, channels)
+            in_data = self._resampler.resample_chunk(samples).tobytes()
+        return super()._audio_in_callback(in_data, frame_count, time_info,
+                                          status)
+
+
+class ResamplingAudioTransport(LocalAudioTransport):
+    """LocalAudioTransport whose input side is a ``ResamplingAudioInput``."""
+
+    def __init__(self, params: LocalAudioTransportParams, input_device_rate: int):
+        super().__init__(params)
+        self._input_device_rate = input_device_rate
+
+    def input(self) -> FrameProcessor:
+        if not self._input:
+            self._input = ResamplingAudioInput(self._pyaudio, self._params,
+                                               self._input_device_rate)
+        return self._input
+
+
+def pick_audio_devices(args) -> tuple[int | None, int | None, int]:
+    """Resolve (input_index, output_index, input_open_rate) and log the choice.
+
+    Booth rule: the USB mic when one is plugged in (``--mic-device``, tried
+    in order), else the robot's own mic; the speaker is always the robot's
+    (``--audio-device``). ``--input-device`` / ``--output-device`` force an
+    index. The input rate is whatever the chosen mic will actually open at
+    (``ResamplingAudioInput`` brings it to the pipeline rate).
+    """
+    prefs = parse_mic_prefs(args.mic_device)
+    devices = list_audio_devices()
+    choice = choose_audio_devices(devices, prefs, args.audio_device)
+    if args.input_device is not None:
+        in_idx = args.input_device
+        logger.info("audio: mic index %d forced by --input-device", in_idx)
+    else:
+        in_idx = choice.input.index if choice.input else None
+        if choice.input is None:
+            logger.warning("audio: no microphone found for %r or %r; "
+                           "PyAudio's default input will be used",
+                           args.mic_device, args.audio_device)
+        elif choice.input_fallback:
+            logger.info("audio: no USB mic matching %r; using the robot's "
+                        "built-in mic %r (index %d)", args.mic_device,
+                        choice.input.name, in_idx)
+        else:
+            logger.info("audio: mic %r (index %d)", choice.input.name, in_idx)
+    if args.output_device is not None:
+        out_idx = args.output_device
+    else:
+        out_idx = choice.output.index if choice.output else None
+        if choice.output is None:
+            logger.warning("audio: no speaker matching %r; PyAudio's default "
+                           "output will be used", args.audio_device)
+        else:
+            logger.info("audio: speaker %r (index %d)", choice.output.name,
+                        out_idx)
+    in_rate = args.sample_rate
+    if in_idx is not None and devices:
+        in_rate = input_rate_for(in_idx, args.sample_rate,
+                                 args.audio_in_channels)
+        if in_rate != args.sample_rate:
+            logger.info("audio: mic opens at %d Hz, resampling to %d Hz",
+                        in_rate, args.sample_rate)
+    return in_idx, out_idx, in_rate
 
 
 # ---------------------------------------------------------------------------
@@ -837,25 +946,20 @@ async def run(args) -> None:
         robot.home(duration=1.0)
 
     # -- audio device ------------------------------------------------------
-    in_idx, out_idx = (args.input_device, args.output_device)
-    if in_idx is None or out_idx is None:
-        found_in, found_out = find_audio_device(args.audio_device)
-        in_idx = in_idx if in_idx is not None else found_in
-        out_idx = out_idx if out_idx is not None else found_out
-    logger.info("audio: input_device=%s output_device=%s (%r)",
-                in_idx, out_idx, args.audio_device)
+    # USB mic if present, else the robot's own; speaker always the robot's.
+    in_idx, out_idx, in_rate = pick_audio_devices(args)
 
     # --deaf: never open the microphone. Scripted --say runs otherwise pick
     # up room noise as phantom user turns (Whisper will happily transcribe a
     # hallway), which makes them nondeterministic.
-    transport = LocalAudioTransport(LocalAudioTransportParams(
+    transport = ResamplingAudioTransport(LocalAudioTransportParams(
         audio_in_enabled=not args.deaf,
         audio_out_enabled=True,
         audio_in_sample_rate=args.sample_rate,
         audio_out_sample_rate=args.sample_rate,
         input_device_index=in_idx,
         output_device_index=out_idx,
-    ))
+    ), input_device_rate=in_rate)
 
     # Both run on this machine. Whisper goes through MLX, so transcription is
     # on the Apple-Silicon GPU rather than the CPU; Kokoro synthesises through
@@ -1392,7 +1496,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("audio")
     g.add_argument("--audio-device", default=AUDIO_DEVICE_NAME,
-                   help="substring of the audio device name to use")
+                   help="substring of the speaker device's name; its mic is "
+                        "the fallback when no --mic-device is present")
+    g.add_argument("--mic-device", default=MIC_DEVICE_NAME,
+                   help="preferred microphone(s): comma-separated name "
+                        "substrings tried in order, falling back to the "
+                        "--audio-device mic; '' means always the fallback")
+    g.add_argument("--audio-in-channels", type=int, default=1,
+                   help="channels to open the mic with")
     g.add_argument("--input-device", type=int, default=None,
                    help="explicit PyAudio input index (overrides --audio-device)")
     g.add_argument("--output-device", type=int, default=None,

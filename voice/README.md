@@ -122,6 +122,7 @@ Useful flags:
 .venv/bin/python agent.py --list-devices        # audio devices and their indices
 .venv/bin/python agent.py --no-robot            # voice only, robot untouched
 .venv/bin/python agent.py --audio-device "MacBook Pro"   # use laptop audio instead
+.venv/bin/python agent.py --mic-device ""       # ignore any USB mic, use the robot's own
 .venv/bin/python agent.py --fast                # Claude fast mode (see below)
 .venv/bin/python agent.py --language fr         # pin to one language, no detection
 ```

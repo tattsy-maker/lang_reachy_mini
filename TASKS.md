@@ -530,6 +530,13 @@ either passing or written up as a known issue with a booth workaround.
   comeback (camera missed the face at startup), "forget me", family
   pre-enrollment, booth mic, bake-off. Cloud is one visitor per launch
   until T12. [progress/T11.md](progress/T11.md).
+- 2026-09-04 — **booth mic done in code**: the USB desk mic ("USB
+  Composite Device") when plugged in, the robot's own mic otherwise,
+  speaker always the robot's (`--mic-device`, `BOOTH_MIC_DEVICE`). Needed
+  a resampling input transport: the USB mic only opens at 48 kHz, the
+  robot's only at 16 kHz. Both paths measured on the real devices;
+  mute-while-speaking with the desk mic still to be checked in person.
+  [progress/T11.md](progress/T11.md).
 
 ---
 
