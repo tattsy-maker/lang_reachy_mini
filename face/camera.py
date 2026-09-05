@@ -173,6 +173,28 @@ class Camera:
                 yield frame
 
 
+def save_frame(frame, root, stamp: float | None = None) -> Path | None:
+    """Write one BGR frame as ``<root>/<YYYY-MM-DD>/<HH-MM-SS.mmm>.jpg`` and
+    return the path (None if the write fails). T15.10: the ``look`` tool
+    keeps every frame it shows the model, so "why did it see someone
+    wearing glasses?" (2026-09-04) can be answered by opening the file
+    instead of guessing between a bystander, a face on a laptop screen
+    and a hallucination."""
+    try:
+        t = time.time() if stamp is None else stamp
+        day = time.strftime("%Y-%m-%d", time.localtime(t))
+        name = time.strftime("%H-%M-%S", time.localtime(t)) \
+            + ".%03d.jpg" % int((t % 1) * 1000)
+        folder = Path(root) / day
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / name
+        if not cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85]):
+            return None
+        return path
+    except Exception:                                          # noqa: BLE001
+        return None
+
+
 class FrameHub:
     """One camera, many readers (T13.3).
 

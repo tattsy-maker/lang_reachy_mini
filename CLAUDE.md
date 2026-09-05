@@ -272,6 +272,11 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   present pose, so passing the held body_yaw with each head nudge
   twitched the base at ~2 Hz. `tests/t15/probe_body_twitch.py` measures
   it on the metal.
+- **What did it see?** Every `look` frame is saved under
+  `booth/logs/looks/<date>/` (the `look:` log line names the file), and
+  every mid-session face check logs `session: face check: same|unsure|
+  other (score …)`. Open the jpg before debating whether the model
+  hallucinated (2026-09-04, "someone wearing glasses").
 - **Lag has a number now.** `grep "turn: first sound" voice/run.log`
   gives visitor-stop → first sound per reply (cloud: from the voice
   collector's energy gate, so ±0.8 s). Measure before tuning.

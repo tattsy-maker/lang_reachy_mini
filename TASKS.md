@@ -961,6 +961,17 @@ the robot could not see while the `look` tool said it could.
   dance request) is not the student leaving. Tests: driver refusal on
   the stub, goto groups on a fake vendor object, embodiment hold and
   tool skips in the voice venv, farewell gating and prompt text.
+- **T15.10 — Answerable sight and identity (from the 20:27 run).** The
+  robot described "someone with glasses and a blue shirt" twice, then
+  the actual visitor; nothing could say whether a bystander, a face on
+  the open laptop, or a hallucination. Now every `look` frame is saved
+  under `booth/logs/looks/<date>/` (`--look-dir`, '' to disable) and
+  the log line names the file; every mid-session face check is logged
+  (a verdict change at once, else a 10 s summary with the score
+  range); and confident matches are averaged into the session's
+  reference face, so a poor walk-up likeness does not leave a visitor
+  in the unsure band for minutes. Tests: frame saver, check logging,
+  reference strengthening.
 
 **Definition of Done.** `tests/run.sh t15` green (unit + live seat
 swap); the next family session run with people swapping seats
@@ -986,4 +997,8 @@ per walk-up, and `turn:` lines in the log.
   dances (both: anything superseded a recorded move), a base twitch at
   ~2 Hz (every goto re-drove the body servo), and a goodbye nobody said
   that then triggered the wish question twice.
+- 2026-09-04 (night) — **T15.10** after the 20:27 run's "someone with
+  glasses": look frames kept on disk, every face check logged, the
+  reference face strengthened by confident matches. `tests/run.sh t15`
+  26 passed.
 

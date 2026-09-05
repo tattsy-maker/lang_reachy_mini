@@ -255,7 +255,13 @@ class SessionRunner:
         self.swap_secs = swap_secs
         self.face_vouch_secs = face_vouch_secs
         self._session_face = None          # who this session started with
+        self._session_vectors: list = []   # confident matches, averaged in
         self._same_face_at: float | None = None
+        # T15.10: every recheck is logged -- a verdict change at once,
+        # otherwise a 10 s summary -- so a weak reference face shows up
+        # as a run of "unsure" instead of silence (2026-09-04 20:28).
+        self._check_log = {"verdict": None, "since": 0.0, "n": 0,
+                           "lo": 1.0, "hi": -1.0}
         self._other_since: float | None = None
         self._last_recheck: float = -1e9
         self._force_recheck = False
@@ -393,6 +399,9 @@ class SessionRunner:
         if self.voice_identity is not None:
             self.voice_identity.reset()
         self._session_face = face
+        self._session_vectors = list(self._recent_vectors)
+        self._check_log = {"verdict": None, "since": now, "n": 0,
+                           "lo": 1.0, "hi": -1.0}
         self._same_face_at = now
         self._other_since = None
         self._last_recheck = now
@@ -432,6 +441,7 @@ class SessionRunner:
         if self.voice_identity is not None:
             self.voice_identity.reset()
         self._session_face = None
+        self._session_vectors = []
         self._same_face_at = self._other_since = None
         self._recent_vectors = []        # the next face starts clean
         if self.stt is not None and hasattr(self.stt, "initial_prompt"):
@@ -494,14 +504,38 @@ class SessionRunner:
                 logger.info("session: the session's face is back (score %.3f)",
                             score)
             self._other_since = None
-            return "same"
-        if score < recognize.REJECT_THRESHOLD:
+            # T15.10: a confident match strengthens the reference. The
+            # three walk-up frames can be a poor likeness (moving, far,
+            # half-turned); averaging in what the session keeps seeing
+            # makes the swap test sharper as the minutes pass.
+            if self._session_face is not None and len(self._session_vectors) < 12:
+                self._session_vectors.append(embedding)
+                self._session_face = recognize.enroll_from_vectors(
+                    self._session_vectors)
+            verdict = "same"
+        elif score < recognize.REJECT_THRESHOLD:
             if self._other_since is None:
                 self._other_since = now
                 logger.info("session: a different face is in front of the "
                             "robot (score %.3f vs the session's face)", score)
-            return "other"
-        return "unsure"
+            verdict = "other"
+        else:
+            verdict = "unsure"
+        self._log_check(verdict, score, now)
+        return verdict
+
+    def _log_check(self, verdict: str, score: float, now: float) -> None:
+        c = self._check_log
+        c["n"] += 1
+        c["lo"], c["hi"] = min(c["lo"], score), max(c["hi"], score)
+        if verdict != c["verdict"] or now - c["since"] >= 10.0:
+            if c["n"] == 1:
+                logger.info("session: face check: %s (score %.3f)", verdict, score)
+            else:
+                logger.info("session: face check: %s (score %.3f; %d checks in "
+                            "%.0fs, %.2f-%.2f)", verdict, score, c["n"],
+                            now - c["since"], c["lo"], c["hi"])
+            c.update(verdict=verdict, since=now, n=0, lo=1.0, hi=-1.0)
 
     # -- the frame loop ----------------------------------------------------
 

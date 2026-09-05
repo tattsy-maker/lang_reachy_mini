@@ -188,6 +188,45 @@ def test_runner_prompts_carry_the_booth_note(tmp_path):
     assert "swap seats" not in quiet.idle_prompt()
 
 
+def test_confident_matches_strengthen_the_reference_face(tmp_path):
+    """2026-09-04 20:28: a weak walk-up reference scored the same visitor
+    in the unsure band for two minutes and the log showed nothing."""
+    runner, store, holder = make(tmp_path)
+    ana = unit(0)
+    start_with(runner, store, holder, blend(ana, 0.7, seed=9))   # a poor likeness
+    before = float(np.dot(runner._session_face, ana))
+    for t in (11.0, 13.0, 15.0, 17.0):
+        observe(runner, Face(embedding=blend(ana, 0.95, seed=int(t))), now=t)
+    after = float(np.dot(runner._session_face, ana))
+    assert after > before + 0.1, (before, after)
+    assert len(runner._session_vectors) <= 12
+
+
+def test_every_face_check_is_logged(tmp_path, caplog):
+    import logging
+    runner, store, holder = make(tmp_path)
+    ana = unit(0)
+    start_with(runner, store, holder, ana)
+    with caplog.at_level(logging.INFO, logger="session"):
+        observe(runner, Face(embedding=blend(ana, 0.9)), now=11.0)      # same
+        observe(runner, Face(embedding=blend(ana, 0.35)), now=13.0)     # unsure
+        observe(runner, Face(embedding=blend(ana, 0.36, seed=2)), now=15.0)
+        observe(runner, Face(embedding=blend(ana, 0.34, seed=3)), now=24.0)
+    checks = [r.getMessage() for r in caplog.records if "face check:" in r.getMessage()]
+    assert any("same" in c for c in checks), checks
+    assert any(c.startswith("session: face check: unsure") for c in checks), checks
+    assert any("checks in" in c for c in checks), "no 10 s summary:\n" + "\n".join(checks)
+
+
+def test_save_frame_writes_a_dated_jpeg(tmp_path):
+    from face.camera import save_frame
+    frame = np.zeros((48, 64, 3), dtype=np.uint8)
+    path = save_frame(frame, tmp_path / "looks", stamp=1_800_000_000.25)
+    assert path is not None and path.suffix == ".jpg" and path.exists()
+    assert path.parent.parent == tmp_path / "looks" and path.name.endswith(".250.jpg")
+    assert save_frame(frame, "/proc/nowhere") is None
+
+
 # -- T15.2: the voice asks, never ends -------------------------------------------------
 
 def test_speaker_change_needs_four_misses_in_a_row(tmp_path):

@@ -140,6 +140,7 @@ DEFAULT_DEVICE_ID = "reachy-mini-1"
 DEFAULT_TENANT = "lab"
 AUDIO_DEVICE_NAME = SPEAKER_DEVICE_NAME
 _HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_LOOK_DIR = os.path.join(os.path.dirname(_HERE), "booth", "logs", "looks")
 ENV_FILE = os.path.join(_HERE, ".env")
 
 # Where a .env might reasonably live: next to this script, at the project root
@@ -556,7 +557,8 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None,
 # Sight on demand (T14.1)
 # ---------------------------------------------------------------------------
 
-def build_look_tool(hub, speech: str, task_ref: dict, gemini_ref: dict) -> list:
+def build_look_tool(hub, speech: str, task_ref: dict, gemini_ref: dict,
+                    save_dir=None) -> list:
     """``look``: one frame from the camera, shown to the model on request.
 
     The family asked for it twice ("can you describe what you see?"). One
@@ -574,14 +576,16 @@ def build_look_tool(hub, speech: str, task_ref: dict, gemini_ref: dict) -> list:
     requires stays intact).
     """
     import cv2
+    from face.camera import save_frame
 
     def grab():
         seq, frame = hub.latest()
         if frame is None:
             return None
+        saved = save_frame(frame, save_dir) if save_dir else None
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w = rgb.shape[:2]
-        return rgb.tobytes(), (w, h)
+        return rgb.tobytes(), (w, h), saved
 
     async def look(params):
         got = grab()
@@ -589,8 +593,9 @@ def build_look_tool(hub, speech: str, task_ref: dict, gemini_ref: dict) -> list:
             await params.result_callback(
                 {"error": "no camera frame available right now"})
             return
-        image, size = got
-        logger.info("look: one %dx%d frame shown to the model", *size)
+        image, size, saved = got
+        logger.info("look: one %dx%d frame shown to the model%s", *size,
+                    (" (saved %s)" % saved) if saved else "")
         if speech == "cloud":
             gemini = gemini_ref.get("service")
             if gemini is None:
@@ -1255,7 +1260,8 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             from face.camera import FrameHub
             hub = FrameHub(args.face_source, fps=2.0).start()
         if hub is not None and not args.no_look:
-            tools = tools + build_look_tool(hub, args.speech, late, late)
+            tools = tools + build_look_tool(hub, args.speech, late, late,
+                                            save_dir=args.look_dir or None)
         if holder.learner:
             logger.info("tutor mode: student %s (%s %s, %d prior sessions, "
                         "tier %s)", holder.learner.name, holder.learner.level,
@@ -1689,6 +1695,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="testing: hear this wav as the visitor's voice at "
                         "each --say turn instead of the microphone; repeat "
                         "the flag to change speakers turn by turn")
+    g.add_argument("--look-dir", default=DEFAULT_LOOK_DIR, metavar="DIR",
+                   help="keep every frame the look tool shows the model "
+                        "under DIR/<date>/ (T15.10); '' to keep none")
     g.add_argument("--no-look", action="store_true",
                    help="do not offer the 'look' camera tool")
     g.add_argument("--no-track", action="store_true",
