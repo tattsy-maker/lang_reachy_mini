@@ -362,7 +362,7 @@ async def cmd_shake(s: _Session, a) -> None:
 
 
 async def cmd_perform(s: _Session, a) -> None:
-    jprint(await s.run_motion("play_move", move=a.name))
+    jprint(await s.run_motion("play_move", move=a.name, repeat=a.repeat))
 
 
 async def cmd_moves(s: _Session, a) -> None:
@@ -517,6 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
     perform = sub.add_parser("perform", help="play a curated recorded move "
                                              "(see 'moves')")
     perform.add_argument("name")
+    perform.add_argument("--repeat", type=int, default=1)
     sub.add_parser("moves", help="list the curated recorded moves")
     for name, amp in (("nod", 0.25), ("shake", 0.4)):
         g = sub.add_parser(name, help="%s the head" % name)

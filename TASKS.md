@@ -50,8 +50,9 @@ exercised on the physical robot) · `cut` (dropped per spec).
 | T9 | Conversational enrollment | T2, T3, T4 | done | 2026-08-31 |
 | T10 | Session lifecycle | T2, T4, T9 | done | 2026-08-31 |
 | T11 | Faire hardening & dress rehearsal | all | in progress | 2026-09-02 |
-| T12 | Cloud session lifecycle (watch / walk-away / reset over Gemini) | T8, T10 | todo | — |
+| T12 | Cloud session lifecycle (watch / walk-away / reset over Gemini) | T8, T10 | done (as T14.3) | 2026-09-03 |
 | T13 | Family feedback round 1: goals, presence, tracking, showmanship | T11, T12 | in progress | 2026-09-02 |
+| T14 | Family feedback round 2: sight, calm tracking, one visitor at a time, longer dances | T13 | in progress | 2026-09-03 |
 
 Parallelizable from the start (after T0): T1, T3, T5, T7 have no
 dependencies on each other. The critical path is
@@ -575,7 +576,10 @@ happens for both.
 green; `start_booth.sh` can launch cloud mode.
 
 **Progress log.**
-- —
+- 2026-09-03 — absorbed into T14.3 after the second family session made
+  the one-visitor-per-launch gap the evening's main failure. Built as
+  `session.CloudBrain` (per-visitor reset of the Gemini session) plus a
+  voice-print speaker-change trigger. See T14.
 
 ---
 
@@ -775,3 +779,92 @@ with the booth mic (T11 item 1) and its debrief filed as
   discloses the voice signature. **Open**: thresholds are calibrated on
   synthetic voices only; measure the family's real voices at the next
   session (the gate takes `--dir`).
+
+---
+
+## T14 — Family feedback round 2: sight, calm tracking, one visitor at a time
+
+**Goal.** What the second family session (2026-09-03, cloud voice, all of
+T13 on) asked for, with the log evidence in
+[progress/T14.md](progress/T14.md). Logs of every booth run are now kept
+under `booth/logs/<date>_<name>/` (gitignored: names and transcripts).
+
+**What the log showed.** One launch, 28 minutes, three people in turn
+without anyone restarting the agent. John enrolled and said goodbye;
+Rock walked up and tried to enroll and got "already tutoring John";
+when John came back and said "I am John Maritime, I was before Rock",
+the robot had one long Gemini history with everyone in it. Gemini's
+own 10-minute session limit forced three reconnects, each replaying the
+whole history. The voice check never fired for Rock because the running
+print averaged Rock's samples into John's. The tracker and embodiment
+together sent ~135 posture commands a minute. And the robot never
+logged what it said (no output transcript in cloud mode).
+
+**Subtasks.**
+
+- **T14.1 — Sight on demand.** A `look` tool: grab the newest frame
+  from the shared camera hub and show it to the model — cloud: push it
+  as an input image to Gemini Live (its native video input); local:
+  append an image message to Claude's context. Used when asked ("can
+  you describe what you see?" was asked twice tonight), or when the
+  robot wants to check who is in front of it. One frame per call, never
+  a stream (privacy: the prompt says it sees faces only for recognition
+  otherwise). Tests: tool round-trip on the fixture clip in both modes.
+- **T14.2 — Calm tracking.** Gentler controller defaults (lower gain,
+  wider dead-band, longer minimum interval, smaller steps, slower
+  moves) and a quieter embodiment sway, so the head *settles* on the
+  person instead of twitching; a `tracker:` summary line per minute so
+  the log shows how much it moved. Tests: the controller tests updated
+  to the new numbers; a fixture run asserts command rate ≤ 1/s.
+- **T14.3 — One visitor at a time over the cloud voice (absorbs T12).**
+  The session runner runs in cloud mode: on session start it sets the
+  visitor's briefing as the context's system message and reconnects
+  Gemini (fresh server-side history, no replay); on session end it
+  cues the goodbye + notes, then resets the context and reconnects
+  again. Two triggers end a session: the face walk-away timer (T13.2)
+  and a **speaker change** from the voice print — compared per recent
+  sample window, not the session mean, with two consecutive mismatches
+  after a verified match meaning a new person is talking. A changed
+  speaker gets the stranger flow (enroll or "is that you?") instead of
+  "already tutoring John". Session-level `record_wish`/notes stay with
+  the right person. `start_booth.sh` gets `BOOTH_SPEECH=cloud` as the
+  default. Tests: simulated two-visitor sequence over cloud mode with
+  `--voice-source` switching between speakers; existing local T10 tests
+  untouched.
+- **T14.4 — The wishlist question, asked like a person.** Only once
+  the visitor says goodbye: "before you go, one question…", then wait
+  for the answer, then `record_wish`, then the goodbye and the notes.
+  Never announced mid-lesson. Tests: persona text; a scripted goodbye
+  turn ends with `record_wish` fired *after* an answer.
+- **T14.5 — Longer dances.** `play_move` takes `repeat`; the `perform`
+  tool takes `seconds` (up to 60) and loops the move to fill it; the
+  default dance runs ~30 s. "Funny music alongside" is noted, not built
+  (the speaker belongs to the voice). Tests: stub playback with repeat,
+  duration reported.
+- **T14.6 — Spoken transcript in the log.** Log Gemini's output
+  transcription as `said: …` next to `heard: …`, so a booth log is a
+  readable two-sided transcript. Local mode already logs TTS lines.
+- **T14.7 — Web search: enable it.** Guide in
+  [progress/T14.md](progress/T14.md): billing on the AI Studio project
+  behind `GEMINI_API_KEY`; the probe in the agent then switches it on
+  by itself. No code.
+
+**Definition of Done.** T14.1–T14.6 green on the simulated path; the
+next family session run off one launch with people swapping in front
+of the robot and each getting their own greeting, notes and wish.
+
+**Progress log.**
+- 2026-09-03 — task written from the second family session's logs.
+- 2026-09-03 (late) — **T14.1–T14.6 built and green on the simulated
+  path** (`tests/run.sh t14`: 12 unmarked, 1 models, 3 live). Live:
+  the `look` tool described the fixture face in both speech modes; one
+  cloud launch served two visits of the same clip — stranger enrolled
+  with a voice print, said goodbye (notes), left (mic muted, idle),
+  came back, was recognized at 0.992 and greeted by name in Spanish
+  from a fresh Gemini session, left again (second notes entry) — and the
+  log carried `said:` lines for every reply. The wrong-voice challenge
+  → downgrade flow still passes with the per-sample decision. T14.7 is
+  the guide in progress/T14.md (billing on the AI Studio project);
+  nothing to build. **Open**: in person — does the retuned tracker
+  read as calm, does a family member swapping in mid-session trigger
+  the speaker change within two sentences, do the 30 s dances please.

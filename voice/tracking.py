@@ -11,9 +11,11 @@ is far enough round that the neck would look strained.
 
 Rules that keep it from twitching or fighting the other motion sources:
 
-* **Dead-band and rate limit.** Offsets under ``dead_band`` are ignored
-  and commands are at least ``min_interval`` apart, with a step cap, so a
-  talker who sways a little gets a still robot.
+* **Dead-band and rate limit.** Offsets under ``dead_band`` (6 deg) are
+  ignored and commands are at least ``min_interval`` (0.8 s) apart, with
+  a step cap (8 deg) and moves that take most of the interval, so a
+  talker who sways a little gets a still robot and a walker gets a head
+  that glides after them (retuned after the 2026-09-03 session).
 * **DOF ownership** (see ``embodiment.py``): the tracker owns ``head_yaw``
   and ``body_yaw``. Embodiment owns pitch and the antennas; the tracker
   only *biases* pitch through ``Embodiment.pitch_bias`` and writes it
@@ -80,14 +82,21 @@ class FaceTracker:
     ``{"measured": {...}}``. Tests pass a fake with just ``posture``.
     """
 
-    def __init__(self, robot, *, embodiment=None, gain: float = 0.7,
-                 dead_band: float = math.radians(3.0),
-                 min_interval: float = 0.4,
-                 max_step: float = math.radians(20.0),
+    def __init__(self, robot, *, embodiment=None, gain: float = 0.5,
+                 dead_band: float = math.radians(6.0),
+                 min_interval: float = 0.8,
+                 max_step: float = math.radians(8.0),
                  handoff: float = HANDOFF_YAW,
                  focal_per_width: float = LITE_FOCAL_PER_WIDTH,
                  relax_after: float = 8.0,
+                 move_secs: float = 0.7,
                  clock=time.monotonic) -> None:
+        # Defaults retuned after the 2026-09-03 family session (T14.2):
+        # the first cut (gain 0.7, 3 deg dead-band, 0.4 s, 20 deg steps,
+        # 0.35 s moves) plus the talking sway put ~135 posture commands a
+        # minute on the robot and read as twitching. Half the gain, twice
+        # the dead-band and interval, steps under 10 deg, moves that take
+        # most of the interval: the head glides and settles.
         self.robot = robot
         self.embodiment = embodiment
         self.gain = gain
@@ -97,7 +106,10 @@ class FaceTracker:
         self.handoff = handoff
         self.focal_per_width = focal_per_width
         self.relax_after = relax_after
+        self.move_secs = move_secs
         self._clock = clock
+        self._minute_start = clock()
+        self._minute_moves = 0
         self.enabled = True
         self._yaw = 0.0
         self._body = 0.0
@@ -189,7 +201,7 @@ class FaceTracker:
             return None
 
         cmd: dict = {}
-        duration = 0.35
+        duration = self.move_secs
         if move_yaw:
             step = _clamp(self.gain * yaw_off, self.max_step)
             target = self._yaw + step
@@ -199,7 +211,7 @@ class FaceTracker:
                 # as a turn rather than a flinch.
                 self._body = _clamp(self._body + target, BODY_YAW_LIMIT)
                 target = 0.0
-                duration = 0.9
+                duration = 1.4
                 cmd["body_yaw"] = self._body
                 self.suspend(duration, stale=False)
             self._yaw = _clamp(target, HEAD_YAW_LIMIT)
@@ -216,7 +228,18 @@ class FaceTracker:
         self.robot.posture(duration=duration, **cmd)
         self.commands.append(dict(cmd, duration=duration, t=now))
         self._last_cmd = now
+        self._count_move(now)
         return cmd
+
+    def _count_move(self, now: float) -> None:
+        """One summary line a minute, so a booth log shows how busy the
+        head was (the 2026-09-03 log had to be counted by hand)."""
+        self._minute_moves += 1
+        if now - self._minute_start >= 60.0:
+            logger.info("tracker: %d moves in the last minute (head %.0f deg, "
+                        "body %.0f deg)", self._minute_moves,
+                        math.degrees(self._yaw), math.degrees(self._body))
+            self._minute_start, self._minute_moves = now, 0
 
     def relax(self, now: float | None = None) -> dict | None:
         """No face for a while: drift back to centre, once."""

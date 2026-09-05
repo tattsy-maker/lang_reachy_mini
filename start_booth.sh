@@ -3,13 +3,15 @@
 # mode, pinned zenoh, preflight checklist, clean SIGINT shutdown with the
 # end-of-day guest wipe.
 #
-#   ./start_booth.sh                 # the booth: session mode, Haiku
-#   BOOTH_MODEL=claude-opus-5 ./start_booth.sh    # home mode: Opus
+#   ./start_booth.sh                 # the booth: cloud voice, session mode
+#   BOOTH_SPEECH=local BOOTH_MODEL=claude-opus-5 ./start_booth.sh  # local
 #   BOOTH_KEEP_GUESTS=1 ./start_booth.sh          # skip the wipe on exit
 #
 # Overridable knobs (env vars):
-#   BOOTH_MODEL         LLM for the tutor (default claude-haiku-4-5-20251001;
-#                       spec 9: booth runs Haiku for pace, home runs Opus)
+#   BOOTH_SPEECH        cloud (default since the family chose the Gemini
+#                       voice, T14.3) or local (Whisper + Claude + Kokoro)
+#   BOOTH_MODEL         LLM for the tutor in local mode (default
+#                       claude-haiku-4-5-20251001; home runs Opus)
 #   BOOTH_AUDIO_DEVICE  substring of the mic/speaker device (default the
 #                       robot's own; T11 mic test decides the handheld name)
 #   BOOTH_FACE_SOURCE   camera for face recognition (default 0 = /dev/video0)
@@ -26,6 +28,7 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
+SPEECH="${BOOTH_SPEECH:-cloud}"
 MODEL="${BOOTH_MODEL:-claude-haiku-4-5-20251001}"
 AUDIO_DEVICE="${BOOTH_AUDIO_DEVICE:-Reachy Mini Audio}"
 FACE_SOURCE="${BOOTH_FACE_SOURCE:-0}"
@@ -49,8 +52,13 @@ say "-- preflight --"
     || die "no /dev/ttyACM0 -- is the robot's USB plugged in?"
 [ -x .venv/bin/python ] && ok "robot venv" || die "./.venv missing (CLAUDE.md setup)"
 [ -x voice/.venv/bin/python ] && ok "voice venv" || die "voice/.venv missing"
-grep -qs "ANTHROPIC_API_KEY=" voice/.env && ok "Anthropic key in voice/.env" \
-    || die "no ANTHROPIC_API_KEY in voice/.env"
+if [ "$SPEECH" = cloud ]; then
+    grep -qs -E "(GEMINI|GOOGLE)_API_KEY=" voice/.env && ok "Gemini key in voice/.env" \
+        || die "no GEMINI_API_KEY in voice/.env (BOOTH_SPEECH=local for Claude)"
+else
+    grep -qs "ANTHROPIC_API_KEY=" voice/.env && ok "Anthropic key in voice/.env" \
+        || die "no ANTHROPIC_API_KEY in voice/.env"
+fi
 grep -qs . /proc/asound/cards && ok "sound card visible" \
     || die "no sound card (audio group membership? see CLAUDE.md)"
 
@@ -110,13 +118,15 @@ done
 kill -0 "$SERVE_PID" 2>/dev/null || die "serve did not stay up; tail $SERVE_LOG"
 ok "serve up (pid $SERVE_PID)"
 
-say "-- starting voice agent (model $MODEL) --"
+say "-- starting voice agent (speech $SPEECH$( [ "$SPEECH" = local ] && echo ", model $MODEL")) --"
 say "   warmup is ~40s cold, seconds when the daemon is warm"
+MODEL_FLAGS=(--speech "$SPEECH")
+[ "$SPEECH" = local ] && MODEL_FLAGS+=(--model "$MODEL")
 # Directly exec python (no subshell): the shutdown trap must SIGINT the
 # real agent process, not a wrapper that would swallow the signal.
 voice/.venv/bin/python voice/agent.py \
     --broker "$BROKER" \
-    --model "$MODEL" \
+    "${MODEL_FLAGS[@]}" \
     --audio-device "$AUDIO_DEVICE" \
     --persona "$PERSONA" \
     "${SESSION_FLAGS[@]}" \

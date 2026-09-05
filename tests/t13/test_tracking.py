@@ -73,14 +73,14 @@ def test_dead_band_and_rate_limit():
     assert robot.sent == []
     cmd = t.observe(box(400, H / 2), W, H, now=2.0)
     assert cmd and cmd["head_yaw"] > 0, "a face on the left -> turn left"
-    assert t.observe(box(400, H / 2), W, H, now=2.1) is None, "rate-limited"
-    assert t.observe(box(400, H / 2), W, H, now=2.6) is not None
+    assert t.observe(box(400, H / 2), W, H, now=2.5) is None, "rate-limited"
+    assert t.observe(box(400, H / 2), W, H, now=3.0) is not None
 
 
 def test_steps_are_capped_and_within_limits():
     t = FaceTracker(FakeRobot(), clock=lambda: 0.0)
     cmd = t.observe(box(5, H / 2), W, H, now=1.0)
-    assert cmd["head_yaw"] <= math.radians(20) + 1e-9, "one step at most 20 deg"
+    assert cmd["head_yaw"] <= math.radians(8) + 1e-9, "one step at most 8 deg"
     for i in range(30):
         t.observe(box(5, H / 2), W, H, now=2.0 + i)
     est = t.estimate
@@ -96,7 +96,7 @@ def test_body_takes_over_past_handoff():
     t = FaceTracker(robot, clock=lambda: 0.0)
     now = 0.0
     body_moves = []
-    for _ in range(8):
+    for _ in range(12):
         now += 1.0
         cmd = t.observe(box(5, H / 2), W, H, now=now) or {}
         if "body_yaw" in cmd:

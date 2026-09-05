@@ -22,7 +22,7 @@ def test_booth_persona_has_the_quips_and_the_wish_question():
     text = build_persona("booth")
     assert text == BOOTH_PERSONA
     assert "I will remember you" in text
-    assert "record_wish" in text and "product" in text
+    assert "record_wish" in text and "robot you had bought" in text
     assert "at most once per visitor" in text
     assert "never at the expense of a learner's mistake" in text
 

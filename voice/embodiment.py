@@ -145,16 +145,19 @@ class Embodiment(FrameProcessor):
         """
         try:
             while True:
+                # Halved amplitudes and a slower beat after the 2026-09-03
+                # family session ("moving too vigorously"): the sway should
+                # read as breathing under the voice, not as fidgeting.
                 dofs = dict(
-                    head_pitch=random.uniform(-0.08, 0.04),
-                    head_roll=random.uniform(-0.06, 0.06),
-                    antenna_left=random.uniform(0.1, 0.7),
-                    antenna_right=random.uniform(-0.7, -0.1),
+                    head_pitch=random.uniform(-0.04, 0.02),
+                    head_roll=random.uniform(-0.03, 0.03),
+                    antenna_left=random.uniform(0.2, 0.5),
+                    antenna_right=random.uniform(-0.5, -0.2),
                 )
                 if self._own_yaw:
-                    dofs["head_yaw"] = random.uniform(-0.10, 0.10)
-                self._posture(0.45, **dofs)
-                await asyncio.sleep(random.uniform(0.5, 0.9))
+                    dofs["head_yaw"] = random.uniform(-0.05, 0.05)
+                self._posture(0.8, **dofs)
+                await asyncio.sleep(random.uniform(0.9, 1.5))
         except asyncio.CancelledError:
             raise
         except Exception as exc:                              # noqa: BLE001

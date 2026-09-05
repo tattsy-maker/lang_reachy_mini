@@ -710,7 +710,7 @@ class ReachyMiniDriver(DeviceDriver):
                           for m in LIBRARY.values()]}
 
     @rpc(labels={"direction": "write", "safety": "critical", "motion": "true"})
-    async def play_move(self, move: str) -> Dict[str, Any]:
+    async def play_move(self, move: str, repeat: int = 1) -> Dict[str, Any]:
         """Play a named move from the curated library. Returns a motion_id,
         does not wait; emits motion_progress per phase.
 
@@ -721,12 +721,15 @@ class ReachyMiniDriver(DeviceDriver):
 
         Args:
             move: One of the names ``list_moves`` reports.
+            repeat: How many passes to play back to back (1-20); a
+                cancel between passes stops the rest.
         """
         from moves import LIBRARY
         spec = LIBRARY.get(str(move))
         if spec is None:
             raise ValueError("unknown move %r; expected one of %s"
                              % (move, ", ".join(LIBRARY)))
+        repeat = max(1, min(20, int(repeat)))
 
         async def run(motion_id):
             if spec.name == "spin":
@@ -752,12 +755,19 @@ class ReachyMiniDriver(DeviceDriver):
                 return await asyncio.to_thread(self._target.goto, 0.25,
                                                antenna_left=left,
                                                antenna_right=right)
-            await self._progress(motion_id, "play_move", phase="playing",
-                                 name=spec.name, seconds=spec.seconds)
-            return await asyncio.to_thread(self._target.play_move, spec.name)
+            posture = None
+            for i in range(repeat):
+                self._checkpoint(motion_id)
+                await self._progress(motion_id, "play_move", phase="playing",
+                                     name=spec.name, seconds=spec.seconds,
+                                     pass_=i + 1, of=repeat)
+                posture = await asyncio.to_thread(self._target.play_move,
+                                                  spec.name)
+            return posture
 
         return await self._begin("play_move",
-                                 {"name": spec.name, "seconds": spec.seconds},
+                                 {"name": spec.name, "repeat": repeat,
+                                  "seconds": spec.seconds * repeat},
                                  run)
 
     @rpc(labels={"direction": "write", "safety": "critical", "motion": "true"})

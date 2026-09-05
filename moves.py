@@ -26,6 +26,8 @@ import argparse
 import sys
 from dataclasses import dataclass
 
+MAX_PERFORM_SECS = 60.0
+
 DANCES = "pollen-robotics/reachy-mini-dances-library"
 EMOTIONS = "pollen-robotics/reachy-mini-emotions-library"
 DATASETS = (DANCES, EMOTIONS)
@@ -36,8 +38,18 @@ class MoveSpec:
     name: str            # what the model asks for
     dataset: str | None  # None = built into the driver
     move: str | None     # the dataset's file stem
-    seconds: float       # rough duration, for pausing trackers and speech
+    seconds: float       # one pass, roughly (recorded clips are 3-12 s)
     description: str
+    default_secs: float = 0.0   # how long "perform" runs it unless told
+                                # otherwise (0 = one pass); T14.5: dances
+                                # loop to ~30 s, the family wanted longer
+
+    def passes_for(self, seconds: float | None) -> int:
+        """How many passes fill ``seconds`` (capped at MAX_PERFORM_SECS)."""
+        want = seconds if seconds and seconds > 0 else (self.default_secs
+                                                        or self.seconds)
+        want = min(float(want), MAX_PERFORM_SECS)
+        return max(1, int(round(want / self.seconds)))
 
 
 # Names are what the model sees; keep them plain English and few. Durations
@@ -45,11 +57,11 @@ class MoveSpec:
 # hold off the face tracker", so a little slack is fine.
 LIBRARY: dict[str, MoveSpec] = {m.name: m for m in (
     MoveSpec("dance", EMOTIONS, "dance1", 9.0,
-             "a short full-body dance; the default when asked to dance"),
+             "a full-body dance; the default when asked to dance", 30.0),
     MoveSpec("dance_groovy", DANCES, "groovy_sway_and_roll", 8.0,
-             "a groovier sway-and-roll dance"),
+             "a groovier sway-and-roll dance", 30.0),
     MoveSpec("dance_pendulum", DANCES, "pendulum_swing", 7.0,
-             "a slow pendulum swing side to side"),
+             "a slow pendulum swing side to side", 30.0),
     MoveSpec("spin", None, None, 6.0,
              "turn the whole body all the way round one way and back"),
     MoveSpec("dizzy", DANCES, "dizzy_spin", 6.0,

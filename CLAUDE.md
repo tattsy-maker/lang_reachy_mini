@@ -126,26 +126,29 @@ README for why).
 
 Product spec: `LANGUAGE_TUTOR_SPEC.md`. Tracker with per-task status and
 dated logs: `TASKS.md`. Details and learnings per task: `progress/T*.md`.
-T0–T10 are done; T11 (Faire hardening) is mid-rehearsal; T12 (cloud
-visitor loop) is the next engineering task, then T13 (the family's
-debrief feedback: goals, presence, tracking, tricks, poster). Read
-`progress/T11.md` first for what the rehearsal found and
-`progress/T13.md` for what the family asked for.
+T0–T10 are done; T11 (Faire hardening) is mid-rehearsal; T13 (the
+family's debrief feedback) and T14 (second session: sight, calm
+tracking, one visitor at a time over the cloud voice — this absorbed
+T12) are built on the simulated path. Read `progress/T14.md` first for
+what the last session's log showed.
 
 ### Start the booth
 
 ```bash
-./start_booth.sh                       # local voice, hands-free visitor loop
+./start_booth.sh                       # cloud voice, hands-free visitor loop
 ```
 
-Knobs: `BOOTH_ABSENT_SECS` (walk-away timer, "still there?" at two
+Knobs: `BOOTH_SPEECH` (`cloud` default since T14.3, `local` for
+Claude), `BOOTH_ABSENT_SECS` (walk-away timer, "still there?" at two
 thirds), `BOOTH_ATTRACT_SECS` (idle dance; 0 = off), `BOOTH_PERSONA`
-(`booth` default, `plain` for none). Speech and face tracking are on
-by default with a camera.
+(`booth` default, `plain` for none). Face tracking, voice prints and
+the `look` tool are on by default with a camera. Visitors swap without
+anyone touching the keyboard: a walk-away or a changed voice ends the
+session and the next face starts a fresh one (fresh Gemini history).
 
-The family chose the **Gemini Live voice** at rehearsal. Until T12 lands,
-cloud mode is one visitor per launch (looks for a face once at startup),
-started by hand:
+The family chose the **Gemini Live voice** at rehearsal. Before T14.3,
+cloud mode was one visitor per launch; the hand-started form is still
+useful for a quick check without the session loop:
 
 ```bash
 .venv/bin/python controller.py serve --zenoh-listen tcp/0.0.0.0:7447 >> serve.log 2>&1 &
@@ -163,7 +166,10 @@ voice/agent.py`, then serve.
 `--learner NAME --learners-root DIR` (tutor one learner) ·
 `--face-source SRC` (camera index / video / image dir) ·
 `--session --stable-secs S --absent-secs S` (booth loop, local mode) ·
-`--speech local|cloud`, `--gemini-model`, `--gemini-voice` ·
+`--speech local|cloud`, `--gemini-model`, `--gemini-voice`,
+`--no-web-search` (cloud mode gives Gemini its native Google Search
+grounding by default; a search shows in the log as `web search: N
+sources`) ·
 `--language ru|zh` (Piper; models in `voice/piper_voices/`, fetch command
 in `voice/piper_tts.py`) · `--deaf` (never open the mic — **always** with
 `--say` scripted runs) · `--persona booth|plain` (T13.5 quips + the
@@ -207,6 +213,15 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   (the booth script does).
 - **A `&` job from a tool shell dies with the shell.** Launch long-lived
   processes detached (the harness's background mode, or `nohup`/`setsid`).
+- **`pkill -f "controller.py serve"` from a tool shell kills the shell
+  too** — the pattern matches the `bash -c` wrapper's own command line,
+  so the command dies silently with exit 1 after the pkill. Use a
+  bracket pattern that cannot match itself: `pkill -INT -f
+  "[c]ontroller.py serve"`, `pkill -INT -f "[v]oice/agent.py"`.
+- **Keep every booth run's logs.** After a session, copy this run's
+  slice of `voice/run.log` and `serve.log` into `booth/logs/<date>_<name>/`
+  (gitignored). The append-only logs are the only record of what
+  happened; the 2026-09-03 session lives there.
 - **Speaker volume:** the mixer default is quiet; the booth script and
   `set_volume` use `amixer -c <card> sset PCM,0 N%`.
 - **One camera, one opener.** `/dev/video0` cannot be streamed by two
@@ -220,6 +235,14 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   suspends the tracker and it re-reads the measured pose on resume.
   Keep that split if you add motion (docstrings in `voice/tracking.py`
   and `voice/embodiment.py`).
+- **Google Search grounding on Gemini Live needs a billing-enabled key.**
+  With `{"google_search": {}}` in the Live setup, the current key gets
+  close code 1011 "You exceeded your current quota" on connect (the
+  same key converses fine without the tool), and pipecat turns that
+  into a silent, dead session. The agent probes the key at startup and
+  logs `web search: unavailable on this key (...)`, then runs without
+  it; the T8 grounding test skips with that reason. Enable billing on
+  the AI Studio project to get it (2026-09-03).
 - **Voice prints run on the GPU, unlike faces.** SpeechBrain ECAPA in
   `voice/.venv` (torch is the cu130 build): 5 ms per 3 s clip on CUDA,
   40 ms on CPU, 5 s model load (paid in warmup). `voice/verify_voiceid.py`

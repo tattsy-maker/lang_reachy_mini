@@ -198,7 +198,7 @@ class SessionRunner:
                  fps: float = 2.0, samples: int = 3,
                  save_wait_secs: float = 30.0, hub=None, tracker=None,
                  attract_secs: float = 0.0, attract_every: float = 180.0,
-                 voice_identity=None):
+                 voice_identity=None, cue=None, brain=None):
         self.source = source
         self.store = store
         self.holder = holder
@@ -213,6 +213,13 @@ class SessionRunner:
         self.hub = hub            # shared camera (T13.3); else own Camera
         self.tracker = tracker    # FaceTracker fed from this loop, if any
         self.voice_identity = voice_identity   # T13.9, reset per visitor
+        # T14.3: how cues reach the model and how the brain is reset per
+        # visitor. ``cue(text)`` defaults to the aggregator path (local
+        # mode); cloud mode passes the agent's say_cue. ``brain`` is a
+        # CloudBrain (below) in cloud mode: it swaps Gemini's system
+        # instruction and reconnects for a fresh server-side history.
+        self.cue = cue
+        self.brain = brain
         self.fps = fps
         self.samples = samples
         self.save_wait_secs = save_wait_secs
@@ -230,9 +237,25 @@ class SessionRunner:
     # -- the two side-effect seams, overridable in tests -------------------
 
     async def _queue_user_turn(self, text: str) -> None:
+        if self.cue is not None:
+            await self.cue(text)
+            return
         from pipecat.frames.frames import LLMMessagesAppendFrame
         await self.task.queue_frames([LLMMessagesAppendFrame(
             messages=[{"role": "user", "content": text}], run_llm=True)])
+
+    async def _set_system_prompt(self, prompt: str, fresh: bool = True) -> None:
+        """This system prompt from now on: the local context always; the
+        cloud brain too -- a fresh server-side session when a visitor
+        starts (``fresh``), or just muted and idle when one leaves (the
+        next start resets it anyway, and Gemini should not hear the room
+        while nobody is there)."""
+        self.context.set_messages([{"role": "system", "content": prompt}])
+        if self.brain is not None:
+            if fresh:
+                await self.brain.reset(prompt)
+            else:
+                await self.brain.idle()
 
     async def _robot_neutral(self) -> None:
         if self.tracker is not None:
@@ -310,8 +333,7 @@ class SessionRunner:
         if self.voice_identity is not None:
             self.voice_identity.reset()
         briefing = self._briefing_for(face)
-        self.context.set_messages([
-            {"role": "system", "content": self.base_prompt + briefing}])
+        await self._set_system_prompt(self.base_prompt + briefing)
         self.machine.session_started(now)
         logger.info("session: started")
         await self._queue_user_turn(WALKUP_CUE)
@@ -343,11 +365,22 @@ class SessionRunner:
             self.voice_identity.reset()
         if self.stt is not None and hasattr(self.stt, "initial_prompt"):
             self.stt.initial_prompt = None
-        self.context.set_messages([
-            {"role": "system", "content": self.idle_prompt()}])
+        await self._set_system_prompt(self.idle_prompt(), fresh=False)
         await self._robot_neutral()
         self.machine.session_ended()
         logger.info("session: ended and reset; watching again")
+
+    async def speaker_changed(self) -> None:
+        """The voice print says somebody else is talking now (T14.3): end
+        the current visitor's session (goodbye + notes for them) and go
+        back to watching -- the face loop starts the newcomer's session
+        by itself, with identity resolved afresh. Nothing to do while
+        watching."""
+        if self.machine.state != ACTIVE:
+            return
+        logger.info("session: speaker changed, ending %s's session",
+                    self.holder.learner.id if self.holder.learner else "the")
+        await self.end_session()
 
     # -- the frame loop ----------------------------------------------------
 
@@ -427,3 +460,72 @@ class SessionRunner:
         finally:
             if self.hub is None:
                 source.close()
+
+
+class CloudBrain:
+    """Per-visitor reset of a Gemini Live session (T14.3, the old T12).
+
+    Gemini keeps the conversation server-side and pipecat's service
+    ignores later local context swaps: its system instruction is fixed
+    at connect, ``_reconnect`` resumes the *same* server session through
+    a resumption handle, and every connect replays the local history.
+    So a new visitor needs all three undone: the service's stored system
+    instruction replaced, the local history emptied, and a connect with
+    no resumption handle. Uses the service's private fields, like the
+    ``_create_single_response`` injection path the agent already relies
+    on -- pinned to pipecat 1.6 and covered by a test that fails loudly
+    if the fields move.
+    """
+
+    FIELDS = ("_system_instruction_from_init", "_session_resumption_handle",
+              "_ready_for_realtime_input", "_disconnect", "_connect")
+
+    def __init__(self, gemini, context, ready_timeout: float = 8.0):
+        self.gemini = gemini
+        self.context = context
+        self.ready_timeout = ready_timeout
+        self.resets = 0
+
+    def _pause_audio(self, paused: bool) -> None:
+        pause = getattr(self.gemini, "set_audio_input_paused", None)
+        if pause is not None:
+            pause(paused)
+
+    async def idle(self) -> None:
+        """Nobody in front of the robot: stop streaming the room to Gemini
+        (no answers to background chatter, no billing for silence). The
+        connection stays; the next visitor's reset replaces it."""
+        self._pause_audio(True)
+        logger.info("cloud brain: idle, microphone not streamed")
+
+    async def reset(self, system_prompt: str) -> None:
+        g = self.gemini
+        g._system_instruction_from_init = system_prompt
+        settings = getattr(g, "_settings", None)
+        if settings is not None and hasattr(settings, "system_instruction"):
+            try:
+                settings.system_instruction = system_prompt
+            except Exception:                              # noqa: BLE001
+                pass
+        # Empty local history: the system message alone is what the
+        # adapter extracts as the instruction; there is nothing to replay.
+        self.context.set_messages(
+            [{"role": "system", "content": system_prompt}])
+        await g._disconnect()
+        g._session_resumption_handle = None
+        await g._connect()
+        self.resets += 1
+        await self.wait_ready()
+        self._pause_audio(False)
+        logger.info("cloud brain: fresh Gemini session with a new briefing")
+
+    async def wait_ready(self) -> bool:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.ready_timeout
+        while loop.time() < deadline:
+            if getattr(self.gemini, "_ready_for_realtime_input", False):
+                return True
+            await asyncio.sleep(0.1)
+        logger.warning("cloud brain: Gemini not ready %.0fs after reconnect",
+                       self.ready_timeout)
+        return False

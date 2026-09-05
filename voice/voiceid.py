@@ -200,37 +200,61 @@ class VoiceIdentity:
         "challenge"   voice disagrees; ask them playfully to say more
         "downgrade"   still disagrees; learner moved to candidate -> ask
         "confirmed"   face was unsure, the voice settled it
+        "speaker_changed"  a verified learner's voice stopped matching for
+                      several samples in a row: someone else is talking
+                      (the session runner ends the session, T14.3)
     """
 
     def __init__(self, store, holder, *, learn_after: int = 2,
                  accept: float = ACCEPT_THRESHOLD,
-                 reject: float = REJECT_THRESHOLD):
+                 reject: float = REJECT_THRESHOLD, window: int = 1,
+                 change_after: int = 2):
         self.store = store
         self.holder = holder
         self.learn_after = learn_after
         self.accept = accept
         self.reject = reject
+        # Compare the *recent* voice, not the whole session's mean: on
+        # 2026-09-03 a second person talked for minutes and the session
+        # mean, dominated by the first speaker's samples, kept matching
+        # him. Each decision looks at the last ``window`` samples (one:
+        # the utterance just heard); ``change_after`` consecutive
+        # mismatches after a verified match mean somebody else is now
+        # talking ("speaker_changed") -- one odd sample is a cough.
+        self.window = window
+        self.change_after = change_after
         self.reset()
 
     def reset(self) -> None:
         self.samples: list[np.ndarray] = []
         self.verified = False
         self.mismatches = 0
+        self.consecutive_mismatches = 0
         self.challenged = False
         self.downgraded = False
+        self.changed = False
         self.last_score: float | None = None
 
     @property
     def print(self) -> np.ndarray | None:
-        """The session's running voice print (mean of samples)."""
+        """The running print used for *enrollment and learning*: the
+        mean of every sample this session (more speech, better print)."""
         return average(self.samples) if self.samples else None
+
+    @property
+    def recent(self) -> np.ndarray | None:
+        """The voice heard just now: mean of the last ``window`` samples,
+        used for every *decision*."""
+        if not self.samples:
+            return None
+        return average(self.samples[-self.window:])
 
     def print_list(self) -> list[float] | None:
         p = self.print
         return None if p is None else [float(x) for x in p]
 
     def _score(self, stored) -> float:
-        score = similarity(self.print, stored)
+        score = similarity(self.recent, stored)
         self.last_score = score
         return score
 
@@ -256,10 +280,11 @@ class VoiceIdentity:
                                 learner.id, len(self.samples))
                     return "learned"
                 return None
-            if self.downgraded:
+            if self.downgraded or self.changed:
                 return None
             score = self._score(stored)
             if score >= self.accept:
+                self.consecutive_mismatches = 0
                 if not self.verified:
                     self.verified = True
                     logger.info("voice: verified %s (score %.3f)",
@@ -268,11 +293,21 @@ class VoiceIdentity:
                 return None
             if score < self.reject:
                 self.mismatches += 1
+                self.consecutive_mismatches += 1
                 if self.verified:
-                    # One good match beats a later bad one (a cough, a
-                    # laugh, someone else chiming in).
+                    # One stray bad sample (a cough, a laugh, a bystander)
+                    # is ignored; several in a row mean the person in
+                    # front of the robot has changed.
+                    if self.consecutive_mismatches >= self.change_after:
+                        self.changed = True
+                        logger.info("voice: %s verified earlier but the last "
+                                    "%d samples do not match (score %.3f): "
+                                    "speaker changed", learner.id,
+                                    self.consecutive_mismatches, score)
+                        return "speaker_changed"
                     logger.info("voice: %s mismatch after verification "
-                                "(score %.3f), ignoring", learner.id, score)
+                                "(score %.3f), waiting for one more",
+                                learner.id, score)
                     return None
                 if not self.challenged:
                     self.challenged = True
@@ -286,6 +321,8 @@ class VoiceIdentity:
                     logger.info("voice: still no match for %s (score %.3f), "
                                 "downgraded to ask", learner.id, score)
                     return "downgrade"
+            else:
+                self.consecutive_mismatches = 0
             return None
 
         if candidate is not None and candidate.voice_embedding \

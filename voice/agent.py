@@ -43,12 +43,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from loguru import logger as loguru_logger                              # noqa: E402
 from pipecat.adapters.schemas.function_schema import FunctionSchema     # noqa: E402
+from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema  # noqa: E402
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import (         # noqa: E402
     LocalSmartTurnAnalyzerV3,
 )
 from pipecat.audio.vad.silero import SileroVADAnalyzer                  # noqa: E402
 from pipecat.audio.vad.vad_analyzer import VADParams                    # noqa: E402
-from pipecat.frames.frames import LLMMessagesAppendFrame, LLMRunFrame   # noqa: E402
+from pipecat.frames.frames import (                                     # noqa: E402
+    BotStoppedSpeakingFrame,
+    InputImageRawFrame,
+    LLMFullResponseEndFrame,
+    LLMMessagesAppendFrame,
+    LLMRunFrame,
+    LLMTextFrame,
+    UserImageRawFrame,
+    UserImageRequestFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline                          # noqa: E402
 from pipecat.pipeline.runner import PipelineRunner                      # noqa: E402
 from pipecat.pipeline.task import PipelineParams, PipelineTask          # noqa: E402
@@ -56,6 +66,8 @@ from pipecat.processors.aggregators.llm_context import (                # noqa: 
     LLMContext,
     LLMSpecificMessage,
 )
+from pipecat.processors.frame_processor import FrameProcessor           # noqa: E402
+from pipecat.services.google.frames import LLMSearchResponseFrame       # noqa: E402
 from pipecat.processors.aggregators.llm_response_universal import (     # noqa: E402
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
@@ -345,12 +357,18 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None) -> list:
                 {"error": "unknown move; choose one of "
                           + ", ".join(LIBRARY)})
             return
-        robot.perform(spec.name)
+        try:
+            seconds = float(params.arguments.get("seconds") or 0)
+        except (TypeError, ValueError):
+            seconds = 0.0
+        passes = spec.passes_for(seconds)
+        total = spec.seconds * passes
+        robot.perform(spec.name, repeat=passes)
         if tracker is not None:
-            tracker.suspend(spec.seconds + 1.0, stale=True)
-        logger.info("perform: %s (%.0fs)", spec.name, spec.seconds)
+            tracker.suspend(total + 1.0, stale=True)
+        logger.info("perform: %s x%d (%.0fs)", spec.name, passes, total)
         await params.result_callback(
-            {"performing": spec.name, "seconds": spec.seconds,
+            {"performing": spec.name, "seconds": total,
              "note": "keep talking while it plays"})
 
     async def nod(params):
@@ -445,7 +463,12 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None) -> list:
                         "while it plays; it takes a few seconds.",
             properties={"move": {"type": "string",
                                  "enum": list(LIBRARY),
-                                 "description": "which move"}},
+                                 "description": "which move"},
+                        "seconds": {"type": "number",
+                                    "description": "how long to keep it "
+                                                   "going, up to 60; "
+                                                   "dances default to "
+                                                   "about 30"}},
             required=["move"],
             handler=perform,
         ),
@@ -462,6 +485,148 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None) -> list:
             properties={}, required=[], handler=get_robot_status,
         ),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Sight on demand (T14.1)
+# ---------------------------------------------------------------------------
+
+def build_look_tool(hub, speech: str, task_ref: dict, gemini_ref: dict) -> list:
+    """``look``: one frame from the camera, shown to the model on request.
+
+    The family asked for it twice ("can you describe what you see?"). One
+    frame per call, never a stream -- the prompt still says the camera
+    is for recognizing faces, and this is the single deliberate
+    exception, taken when the visitor asks or when the robot wants to
+    check who is there.
+
+    Cloud: the frame goes to Gemini Live as an input image (its native
+    video path), then the tool result tells it to describe what it just
+    received. Local: pipecat's function-call image pattern -- a
+    UserImageRawFrame tagged with this tool call's id lands in the user
+    aggregator, which attaches it to the function result, so Claude
+    sees the picture as the tool's answer (the message order Anthropic
+    requires stays intact).
+    """
+    import cv2
+
+    def grab():
+        seq, frame = hub.latest()
+        if frame is None:
+            return None
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w = rgb.shape[:2]
+        return rgb.tobytes(), (w, h)
+
+    async def look(params):
+        got = grab()
+        if got is None:
+            await params.result_callback(
+                {"error": "no camera frame available right now"})
+            return
+        image, size = got
+        logger.info("look: one %dx%d frame shown to the model", *size)
+        if speech == "cloud":
+            gemini = gemini_ref.get("service")
+            if gemini is None:
+                await params.result_callback({"error": "no vision channel"})
+                return
+            gemini._last_sent_time = 0.0     # bypass the 1 fps video throttle
+            await gemini._send_user_video(
+                InputImageRawFrame(image=image, size=size, format="RGB"))
+            await params.result_callback(
+                {"looked": True,
+                 "note": "an image of what your camera sees right now was "
+                         "just sent to you; describe it from that image "
+                         "in one or two sentences, in the conversation's "
+                         "language"})
+            return
+        task = task_ref.get("task")
+        request = UserImageRequestFrame(
+            user_id="visitor", function_name=params.function_name,
+            tool_call_id=params.tool_call_id, append_to_context=True)
+        await task.queue_frames([UserImageRawFrame(
+            user_id="visitor", image=image, size=size, format="RGB",
+            text="What your camera sees right now.", request=request,
+            append_to_context=True)])
+        await params.result_callback(
+            {"looked": True,
+             "note": "describe the attached camera image in one or two "
+                     "sentences"})
+
+    return [FunctionSchema(
+        name="look",
+        description="Take one look through your camera and see what is in "
+                    "front of you right now. Use it when asked what you "
+                    "see, or to check who or what is there. One still "
+                    "image, not a video.",
+        properties={}, required=[], handler=look,
+    )]
+
+
+# ---------------------------------------------------------------------------
+# Web search (cloud mode)
+# ---------------------------------------------------------------------------
+
+async def probe_web_search(api_key: str, model: str) -> str | None:
+    """Can this key use Google Search grounding on the Live API?
+
+    Opens (and immediately closes) one Live session that declares the
+    ``google_search`` tool. Measured 2026-09-03: a key without billing
+    gets close code 1011 "You exceeded your current quota" the moment the
+    tool is in the setup, while the same key without the tool converses
+    fine -- and pipecat's service swallows that failure into a dead,
+    silent session. Probing first turns a mute robot into one clear log
+    line and a run without search. Returns None when search is usable,
+    else the reason.
+    """
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        async with client.aio.live.connect(
+                model=model,
+                config={"response_modalities": ["AUDIO"],
+                        "tools": [{"google_search": {}}]}):
+            return None
+    except Exception as exc:                                    # noqa: BLE001
+        text = str(exc).split("For more information")[0].strip()
+        return f"{type(exc).__name__}: {text[:200]}"
+
+
+class CloudTranscriptLogger(FrameProcessor):
+    """Makes a cloud-mode run log readable (T14.6).
+
+    Gemini Live speaks audio, so nothing downstream logs its words; the
+    2026-09-03 session log had every ``heard`` line and not one reply.
+    Gemini's output transcription arrives as LLMTextFrame chunks, which
+    are gathered here and logged as one ``said: ...`` line per turn. A
+    Google Search the model made arrives as an LLMSearchResponseFrame
+    with its sources; that becomes a ``web search: N sources`` line.
+    """
+
+    def __init__(self):
+        super().__init__(name="CloudTranscriptLogger")
+        self._said: list[str] = []
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, LLMTextFrame):
+            self._said.append(frame.text)
+        elif isinstance(frame, (LLMFullResponseEndFrame,
+                                BotStoppedSpeakingFrame)):
+            # Gemini does not end every turn with a response-end frame
+            # (a cue's reply can run into the next), so the bot going
+            # quiet closes a line too.
+            text = "".join(self._said).strip()
+            self._said = []
+            if text:
+                logger.info("said: %s", " ".join(text.split()))
+        elif isinstance(frame, LLMSearchResponseFrame):
+            sites = sorted({(o.site_title or o.site_uri or "?")
+                            for o in (frame.origins or [])})
+            logger.info("web search: %d sources%s", len(sites),
+                        (" (" + ", ".join(sites[:5]) + ")") if sites else "")
+        await self.push_frame(frame, direction)
 
 
 # ---------------------------------------------------------------------------
@@ -763,16 +928,26 @@ async def run(args) -> None:
         # Measured (progress/T8.md): Gemini Live sometimes speaks the
         # goodbye but skips the save_session_notes call the briefing
         # demands. Claude does not need this reminder; Gemini does.
+        # Filled in below once the probe has run; the prompt must not
+        # promise a search the key cannot make.
+        web_search_note = ("" if args.no_web_search else
+                           "You can search the web (Google Search grounding) "
+                           "when a question needs a current fact: today's news, "
+                           "weather, prices, an event, a word's usage. Use it "
+                           "for real lesson material, keep the answer to one "
+                           "or two spoken sentences, and never read out URLs.\n")
         base_prompt = SYSTEM_PROMPT.format(
             languages=spoken_names,
             vision=VISION_FACE if args.face_source else VISION_NONE) + """
 You can teach every language you can speak, Russian and Mandarin included. \
 If a student asks to practice a different language, switch at once and call \
 set_target_language.
+{web_search}\
 Tool discipline: your tools are real actions, not things to mention. \
 Whenever your instructions say to call a tool at a moment (for example \
 save_session_notes when the student says goodbye), you must actually \
-emit the tool call in that same turn, alongside anything you say."""
+emit the tool call in that same turn, alongside anything you say.""".format(
+            web_search=web_search_note)
 
     # Claude Opus 5. Two deliberate choices for a voice loop:
     #
@@ -833,6 +1008,7 @@ emit the tool call in that same turn, alongside anything you say."""
     holder = store = hub = None
     voice_identity = voice_collector = None
     session_runner = None
+    late = {}          # {"task": PipelineTask, "service": Gemini}, filled below
     if args.session and not args.face_source:
         raise SystemExit("--session needs --face-source (who would it watch?)")
     if args.learner or args.face_source:
@@ -883,7 +1059,9 @@ emit the tool call in that same turn, alongside anything you say."""
                 if session_runner is not None:
                     session_runner.note_voice()   # speech is presence
                 action = voice_identity.on_sample(vector)
-                if action in ("challenge", "downgrade", "confirmed"):
+                if action == "speaker_changed" and session_runner is not None:
+                    await session_runner.speaker_changed()
+                elif action in ("challenge", "downgrade", "confirmed"):
                     who = holder.learner or holder.candidate
                     cue = voice_cue(action, who, store)
                     if cue:
@@ -892,6 +1070,8 @@ emit the tool call in that same turn, alongside anything you say."""
             voice_collector = VoiceCollector(on_voice_sample)
             logger.info("voice id: on (ECAPA prints; samples from %s)",
                         "--voice-source" if args.voice_source else "the mic")
+        elif args.voice_source:
+            raise SystemExit("--voice-source needs voice id (drop --no-voice-id)")
         # One camera, many readers (T13.3): the session watcher, the
         # tracker and enrollment all read from a shared hub whenever any
         # loop will hold the camera for the whole run.
@@ -904,6 +1084,12 @@ emit the tool call in that same turn, alongside anything you say."""
                 store, holder, args.face_source,
                 frames_factory=(hub.frames if hub is not None else None),
                 voice_identity=voice_identity)
+        if hub is None and args.face_source and not args.no_look:
+            # Sight needs a live frame source for the whole run.
+            from face.camera import FrameHub
+            hub = FrameHub(args.face_source, fps=2.0).start()
+        if hub is not None and not args.no_look:
+            tools = tools + build_look_tool(hub, args.speech, late, late)
         if holder.learner:
             logger.info("tutor mode: student %s (%s %s, %d prior sessions, "
                         "tier %s)", holder.learner.name, holder.learner.level,
@@ -917,6 +1103,29 @@ emit the tool call in that same turn, alongside anything you say."""
                     stt.initial_prompt = prompt
                     logger.info("whisper priming: English + %s",
                                 holder.learner.target_language)
+
+    # Cloud mode: Gemini Live's native Google Search grounding rides along
+    # as a provider-specific tool. pipecat's Gemini adapter appends
+    # ``custom_tools[GEMINI]`` verbatim to the function declarations, and
+    # the Live setup takes the *context's* tools over the service's, so
+    # the same ToolsSchema goes to both.
+    web_search = args.speech == "cloud" and not args.no_web_search
+    if web_search:
+        problem = await probe_web_search(google_key, args.gemini_model)
+        if problem:
+            web_search = False
+            logger.warning("web search: unavailable on this key (%s); "
+                           "continuing without Google Search grounding. "
+                           "Grounding on the Live API needs a billing-"
+                           "enabled Google AI Studio key.", problem)
+    if web_search:
+        tools = ToolsSchema(
+            standard_tools=list(tools),
+            custom_tools={AdapterType.GEMINI: [{"google_search": {}}]})
+        logger.info("web search: Google Search grounding enabled for Gemini")
+    elif args.speech == "cloud" and not args.no_web_search:
+        system_prompt = system_prompt.replace(web_search_note, "")
+        base_prompt = base_prompt.replace(web_search_note, "")
 
     # pipecat 1.6's LLMContext accepts a tools list or NOT_GIVEN but not None,
     # so the no-robot path must omit the argument entirely.
@@ -1001,7 +1210,12 @@ emit the tool call in that same turn, alongside anything you say."""
             gemini_kwargs["voice_id"] = args.gemini_voice
         if tools:
             gemini_kwargs["tools"] = tools
+        if args.session:
+            # Nobody is there at startup: do not stream the room until a
+            # face starts a session (CloudBrain.reset resumes the mic).
+            gemini_kwargs["start_audio_paused"] = True
         gemini = GeminiLiveLLMService(**gemini_kwargs)
+        late["service"] = gemini
         logger.info("speech: cloud (Gemini Live, model %s)",
                     args.gemini_model or "pipecat default")
         # The voice tap sits after the user aggregator: its mute strategy
@@ -1012,6 +1226,7 @@ emit the tool call in that same turn, alongside anything you say."""
             stages.append(voice_collector.as_processor())
         pipeline = Pipeline(stages + [
             gemini,
+            CloudTranscriptLogger(),  # "said: ..." and "web search: ..."
             embodiment,      # observes speaking state, passes frames through
             transport.output(),
             aggregators.assistant(),
@@ -1040,6 +1255,7 @@ emit the tool call in that same turn, alongside anything you say."""
         enable_metrics=True,
         enable_usage_metrics=True,
     ))
+    late["task"] = task
 
     async def say_cue(text: str) -> None:
         """Inject a user-turn cue mid-conversation, whichever brain runs.
@@ -1063,14 +1279,19 @@ emit the tool call in that same turn, alongside anything you say."""
     # and starts/ends tutoring sessions on the live pipeline.
     session_task = tracking_task = None
     if args.session:
-        from session import SessionRunner
+        from session import CloudBrain, SessionRunner
         session_runner = SessionRunner(
             source=args.face_source, store=store, holder=holder,
             context=context, task=task, base_prompt=base_prompt,
             languages=spoken_names, robot=robot, stt=stt,
             stable_secs=args.stable_secs, absent_secs=args.absent_secs,
             hub=hub, tracker=tracker, attract_secs=args.attract_secs,
-            voice_identity=voice_identity)
+            voice_identity=voice_identity,
+            # Cloud mode (T14.3): cues go through Gemini's own injection
+            # path and every visitor gets a fresh server-side session.
+            cue=say_cue if args.speech == "cloud" else None,
+            brain=(CloudBrain(gemini, context) if args.speech == "cloud"
+                   else None))
         # Speech is presence (T13.2): a visitor out of frame but talking
         # is not gone.
         embodiment.on_user_speech = session_runner.note_voice
@@ -1096,8 +1317,10 @@ emit the tool call in that same turn, alongside anything you say."""
                 logger.info("injecting utterance %d/%d: %r",
                             i + 1, len(args.say), utterance)
                 if voice_collector is not None and args.voice_source:
-                    # Scripted voice: this file is "what was heard".
-                    await voice_collector.inject_wav(args.voice_source)
+                    # Scripted voice: the i-th file is "what was heard"
+                    # at the i-th utterance (the last one repeats).
+                    wav = args.voice_source[min(i, len(args.voice_source) - 1)]
+                    await voice_collector.inject_wav(wav)
                 if args.speech == "cloud" and i > 0:
                     # The FIRST turn must go through the aggregator: it
                     # seeds the service's context object (without which
@@ -1122,6 +1345,9 @@ emit the tool call in that same turn, alongside anything you say."""
         # it). Every --say test supplied one; a live-mic session never did,
         # and the robot sat there unresponsive. Kick the conversation off
         # the way pipecat's own examples do -- the model greets first.
+        # In session mode the runner greets when a face is stable; the
+        # kick-off here only seeds the context so the mic starts flowing
+        # (the idle prompt tells the model to stay quiet).
         async def cloud_kickoff():
             await asyncio.sleep(1.0)
             await task.queue_frames([LLMRunFrame()])
@@ -1218,6 +1444,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--gemini-voice", default=None, metavar="VOICE",
                    help="Gemini Live voice for --speech cloud "
                         "(default: the service's default)")
+    g.add_argument("--no-web-search", action="store_true",
+                   help="cloud mode: do not give Gemini its native Google "
+                        "Search grounding tool (on by default)")
 
     g = p.add_argument_group("model (cloud)")
     g.add_argument("--auth", default="api-key", choices=["api-key", "oauth"],
@@ -1269,9 +1498,13 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-voice-id", action="store_true",
                    help="do not keep or check voice prints (on by default "
                         "in tutor mode; prints are computed locally)")
-    g.add_argument("--voice-source", default=None, metavar="WAV",
+    g.add_argument("--voice-source", action="append", default=None,
+                   metavar="WAV",
                    help="testing: hear this wav as the visitor's voice at "
-                        "every --say turn instead of the microphone")
+                        "each --say turn instead of the microphone; repeat "
+                        "the flag to change speakers turn by turn")
+    g.add_argument("--no-look", action="store_true",
+                   help="do not offer the 'look' camera tool")
     g.add_argument("--no-track", action="store_true",
                    help="do not follow the visitor's face with head and "
                         "body (tracking is on whenever there is a camera "

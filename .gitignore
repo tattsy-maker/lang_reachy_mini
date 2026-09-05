@@ -27,3 +27,6 @@ __pycache__/
 
 # Visitor wishes recorded at the booth (their words, sometimes first names)
 /booth/wishes.md
+
+# Booth session logs: transcripts and names, kept locally for debugging
+/booth/logs/
