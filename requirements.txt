@@ -1,0 +1,5 @@
+# The robot side: controller.py serve, the driver, recorded moves.
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# Versions are the ones the booth ran on (2026-09).
+reachy-mini==1.10.0
+device-connect-edge==0.2.5

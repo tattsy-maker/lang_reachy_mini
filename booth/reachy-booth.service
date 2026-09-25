@@ -1,0 +1,41 @@
+# The booth, unattended: starts at boot, comes back after a crash, a
+# Gemini outage, or the robot's USB being pulled and plugged back in.
+# start_booth.sh's service mode does the waiting and the fault detection;
+# this unit only restarts it.
+#
+# Install (a user unit; lingering keeps it running with nobody logged in):
+#   cp booth/reachy-booth.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now reachy-booth
+#   loginctl enable-linger $USER          # once
+#
+#   systemctl --user status reachy-booth  # state + last lines
+#   journalctl --user -u reachy-booth -f  # supervisor log (why it restarted)
+#   systemctl --user stop reachy-booth    # clean stop: neutral pose, guests wiped
+#
+# serve.log and voice/run.log still get the detailed logs, as before.
+
+[Unit]
+Description=Reachy Mini language tutor booth
+# Never give up restarting (the default would stop after 5 fast failures).
+StartLimitIntervalSec=0
+
+[Service]
+# Both paths assume the clone lives at ~/Documents/Coding/lang_reachy_mini;
+# edit them if yours is elsewhere.
+Type=simple
+WorkingDirectory=%h/Documents/Coding/lang_reachy_mini
+Environment=BOOTH_SERVICE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/Documents/Coding/lang_reachy_mini/start_booth.sh
+# SIGINT to the script only: its trap SIGINTs the agent and serve so the
+# robot goes back to neutral, then stops the daemon. Anything still alive
+# once it exits is SIGKILLed.
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=75
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

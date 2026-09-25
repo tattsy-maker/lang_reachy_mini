@@ -1,0 +1,150 @@
+[
+  {
+    "language": "ru",
+    "engine": "piper",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "average": 95.9,
+    "minimum": 74.6,
+    "passes_90": true,
+    "sentences": [
+      {
+        "said": "Привет! Я маленький робот и я помогу тебе учить русский язык.",
+        "heard": "«Привет, я маленький робот, и я помогу тебе учить русский язык».",
+        "detected": "ru",
+        "score": 100.0,
+        "audio_secs": 4.52,
+        "synth_secs": 2.97
+      },
+      {
+        "said": "Как прошли твои выходные? Расскажи мне немного.",
+        "heard": "Как прошли твои выходные? Расскажи мне немного.",
+        "detected": "ru",
+        "score": 100.0,
+        "audio_secs": 3.33,
+        "synth_secs": 0.15
+      },
+      {
+        "said": "Это слово произносится немного иначе, попробуй ещё раз.",
+        "heard": "Эта слова произносится немного или иначе, попробуй ещё раз.",
+        "detected": "ru",
+        "score": 92.6,
+        "audio_secs": 3.73,
+        "synth_secs": 0.14
+      },
+      {
+        "said": "Очень хорошо! Ты делаешь большие успехи.",
+        "heard": "Очень хорошо. Ты делаешь большие успехи.",
+        "detected": "ru",
+        "score": 100.0,
+        "audio_secs": 3.01,
+        "synth_secs": 0.12
+      },
+      {
+        "said": "Вчера мы говорили о путешествиях, помнишь?",
+        "heard": "Вчера мы говорили о путешествиях. Помнишь?",
+        "detected": "ru",
+        "score": 100.0,
+        "audio_secs": 3.56,
+        "synth_secs": 0.13
+      },
+      {
+        "said": "Не волнуйся, ошибки это часть учёбы.",
+        "heard": "Не волнуйся, ошибки – это часть учебы.",
+        "detected": "ru",
+        "score": 100.0,
+        "audio_secs": 2.84,
+        "synth_secs": 0.1
+      },
+      {
+        "said": "Давай повторим числа от одного до десяти.",
+        "heard": "Давай повторим числа от 1 до 10.",
+        "detected": "ru",
+        "score": 74.6,
+        "audio_secs": 2.8,
+        "synth_secs": 0.11
+      },
+      {
+        "said": "До свидания, увидимся на следующем занятии!",
+        "heard": "До свидания. Увидимся на следующем занятии.",
+        "detected": "ru",
+        "score": 100.0,
+        "audio_secs": 3.27,
+        "synth_secs": 0.11
+      }
+    ]
+  },
+  {
+    "language": "zh",
+    "engine": "piper",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "average": 92.9,
+    "minimum": 50.0,
+    "passes_90": true,
+    "sentences": [
+      {
+        "said": "你好！我是一个小机器人，我会帮你学习中文。",
+        "heard": "你好,我是一个小机器人我会帮你学习中文",
+        "detected": "zh",
+        "score": 100.0,
+        "audio_secs": 4.47,
+        "synth_secs": 0.86
+      },
+      {
+        "said": "你周末过得怎么样？跟我说说吧。",
+        "heard": "你周末过得怎么样跟我说说吧",
+        "detected": "zh",
+        "score": 100.0,
+        "audio_secs": 2.77,
+        "synth_secs": 0.13
+      },
+      {
+        "said": "这个词的发音有点不一样，再试一次。",
+        "heard": "这个词的发音有点不一样再是一次",
+        "detected": "zh",
+        "score": 93.3,
+        "audio_secs": 3.25,
+        "synth_secs": 0.12
+      },
+      {
+        "said": "非常好！你进步很大。",
+        "heard": "非常好,你进步很大。",
+        "detected": "zh",
+        "score": 100.0,
+        "audio_secs": 2.12,
+        "synth_secs": 0.11
+      },
+      {
+        "said": "昨天我们聊了旅行，你还记得吗？",
+        "heard": "昨天我们聊了旅行你还记得吗",
+        "detected": "zh",
+        "score": 100.0,
+        "audio_secs": 2.64,
+        "synth_secs": 0.11
+      },
+      {
+        "said": "别担心，犯错误是学习的一部分。",
+        "heard": "别担心犯错误,是学习的一部分。",
+        "detected": "zh",
+        "score": 100.0,
+        "audio_secs": 3.13,
+        "synth_secs": 0.1
+      },
+      {
+        "said": "我们来复习一到十的数字吧。",
+        "heard": "我们来复习一到十的数字吧",
+        "detected": "zh",
+        "score": 100.0,
+        "audio_secs": 2.25,
+        "synth_secs": 0.09
+      },
+      {
+        "said": "再见，下次课见！",
+        "heard": "再见下此刻间。",
+        "detected": "zh",
+        "score": 50.0,
+        "audio_secs": 1.37,
+        "synth_secs": 0.06
+      }
+    ]
+  }
+]

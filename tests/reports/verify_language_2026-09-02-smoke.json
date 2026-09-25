@@ -1,0 +1,54 @@
+[
+  {
+    "language": "ru",
+    "engine": "piper",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "average": 100.0,
+    "minimum": 100.0,
+    "passes_90": true,
+    "sentences": [
+      {
+        "said": "Привет! Я маленький робот и я помогу тебе учить русский язык.",
+        "heard": "«Привет, я маленький робот, и я помогу тебе учить русский язык».",
+        "detected": "ru",
+        "score": 100.0,
+        "audio_secs": 4.56,
+        "synth_secs": 3.01
+      },
+      {
+        "said": "Как прошли твои выходные? Расскажи мне немного.",
+        "heard": "как прошли твои выходные. Расскажи мне немного.",
+        "detected": "ru",
+        "score": 100.0,
+        "audio_secs": 3.24,
+        "synth_secs": 0.14
+      }
+    ]
+  },
+  {
+    "language": "zh",
+    "engine": "piper",
+    "whisper_model": "mlx-community/whisper-large-v3-turbo-q4",
+    "average": 100.0,
+    "minimum": 100.0,
+    "passes_90": true,
+    "sentences": [
+      {
+        "said": "你好！我是一个小机器人，我会帮你学习中文。",
+        "heard": "你好,我是一个小机器人我会帮你学习中文",
+        "detected": "zh",
+        "score": 100.0,
+        "audio_secs": 4.09,
+        "synth_secs": 0.8
+      },
+      {
+        "said": "你周末过得怎么样？跟我说说吧。",
+        "heard": "你周末过得怎么样跟我说说吧",
+        "detected": "zh",
+        "score": 100.0,
+        "audio_secs": 2.83,
+        "synth_secs": 0.13
+      }
+    ]
+  }
+]

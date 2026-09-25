@@ -1,0 +1,9 @@
+{
+ "what": "tests/t17/probe_patience.py: two fixture sentences (af_heart_1, af_heart_2) with a 1.2 s pause between them, streamed in real time to Gemini Live (models/gemini-3.1-flash-live-preview) with input transcription on; turns = how many times the model took the turn",
+ "date": "2026-09-05",
+ "runs": [
+  {"patience_ms": 1800, "turns": 1, "secs": 15.1, "transcript": "Good morning, I would like to practice a little Spanish today. Could you say that again, more slowly, so I can repeat it?"},
+  {"patience_ms": 0, "turns": 2, "secs": 15.1, "transcript": "Good morning, I would like to practice a little Spanish today.Could you say that again, more slowly, so I can repeat it?"}
+ ],
+ "reading": "with END_SENSITIVITY_LOW + 1800 ms of silence the pause is not the end of the turn; on Gemini's defaults the same pause produces a reply mid-sentence (the 2026-09-05 interruption)"
+}

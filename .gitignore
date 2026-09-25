@@ -1,0 +1,49 @@
+# Secrets. .env holds a live Anthropic API key -- never commit it.
+# .env.example is the template and IS tracked.
+.env
+.env.*
+!.env.example
+
+# Virtualenvs (both the robot venv and voice/.venv)
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Runtime droppings from serve/agent runs
+*.log
+*.pid
+
+# Learner data: names, face embeddings, session notes. Private by design
+# (spec section 8) -- never committed. The committed sample tree lives at
+# tests/fixtures/learners/, which this anchored pattern does not touch.
+/learners/
+
+# macOS
+.DS_Store
+
+# Visitor wishes recorded at the booth (their words, sometimes first names)
+/booth/wishes.md
+
+# Booth session logs: transcripts and names, kept locally for debugging
+/booth/logs/
+voice/.heartbeat
+
+# Visitor feedback recorded at the booth (their words)
+/booth/feedback.md
+
+# Deck photos and the built deck: supply your own photos, build with
+# booth/make_deck.py. Only the generated QR code is tracked.
+/booth/deck/*.jpg
+/booth/deck/*.jpeg
+/booth/deck/*.png
+!/booth/deck/qr_repo.png
+/booth/deck/*.pptx
+/booth/deck/*.pdf
+
+# Reports generated from a real session's log quote the visitors verbatim
+/tests/reports/judge_corrections_*
+/tests/reports/*.jpg
