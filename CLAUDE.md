@@ -441,6 +441,19 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   say to describe only the picture and never to announce a new person
   (it said "I see someone else now!" of a frame showing only the
   visitor, and "the Maker Faire booth" of a room at home).
+- **Stopping must never drop the head (2026-09-24).** `serve`'s `close()`
+  used to go to neutral and cut torque, so the head fell; the daemon's own
+  shutdown (`reset_to_sleep`) then lifted it back up and lowered it. Now
+  `close()` plays the vendor sleep move, cuts torque at rest and logs
+  `[reachy] asleep at rest, torque off`; seeing that line, the service
+  stops the daemon with `POST /api/daemon/stop?goto_sleep=false`, so there
+  is one descent. Without it (serve crashed) the daemon's sleep still runs.
+- **A beginner is taught in their own language, whatever `explain_in`
+  says (2026-09-24).** The model recorded `explain_in=both` from a Hindi
+  "very much beginner" who had only answered "English", and every line
+  came in Hindi first. `explain_policy()` in `voice/tutor_mode.py` forces
+  `native` for beginners; the beginner briefing speaks the native language
+  for everything and teaches one word or phrase at a time.
 - **Recorded moves need their datasets on disk.** `moves.py --cached`
   says whether the two Pollen HuggingFace libraries are present;
   `--preload` fetches them. The booth preflight does this with a 60 s

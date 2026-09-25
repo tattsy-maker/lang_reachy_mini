@@ -229,19 +229,32 @@ class ReachyMiniTarget:
         return self
 
     def close(self) -> None:
-        """Return to neutral, drop torque, and release the daemon connection."""
+        """Lower the head to its rest, drop torque, and release the daemon.
+
+        Torque is cut only once the head rests at the vendor's sleep pose.
+        Cut anywhere higher, the Stewart head falls under its own weight: it
+        did, from neutral, at every stop until 2026-09-24 (and the daemon's
+        own shutdown then lifted it back up to lower it properly). If the
+        sleep move fails, the motors stay on: holding a pose beats dropping it.
+        """
         mini, self._mini = self._mini, None
         if mini is None:
             return
         try:
-            self.goto_neutral(duration=1.0, _mini=mini)
+            mini.goto_sleep()           # via init if far from it; ~3-5 s
+            asleep = True
         except Exception as exc:                        # noqa: BLE001
-            logger.warning("neutral-on-close failed: %s", exc)
-        try:
-            mini.disable_motors()
-            self._motors_on = False
-        except Exception as exc:                        # noqa: BLE001
-            logger.warning("disable_motors on close failed: %s", exc)
+            asleep = False
+            logger.warning("sleep-on-close failed, keeping torque on: %s", exc)
+        if asleep:
+            try:
+                mini.disable_motors()
+                self._motors_on = False
+                # start_booth.sh reads this line: the daemon then stops
+                # without repeating the sleep move.
+                print("[reachy] asleep at rest, torque off", file=sys.stderr)
+            except Exception as exc:                    # noqa: BLE001
+                logger.warning("disable_motors on close failed: %s", exc)
         # Tear the client down explicitly. ReachyMini starts non-daemon
         # background threads for the WebSocket link and the media manager; if
         # they are not stopped the interpreter will not exit, and a CLI that

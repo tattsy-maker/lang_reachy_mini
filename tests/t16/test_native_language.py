@@ -63,8 +63,8 @@ def test_briefing_explains_in_the_native_language(tmp_path):
     text = build_briefing(igor, "")
     assert "beginner English" in text
     assert "Their own language is Russian" in text
-    assert "brief Russian explanation" in text
-    assert "If Igor drifts into Russian mid-lesson, answer that once in Russian" in text
+    assert "say what it means in Russian" in text
+    assert "Speak Russian for everything" in text
     assert "say what to express in Russian and have Igor say it in English" in text
     assert "English words embedded in a Russian sentence" in text
     assert "set_native_language" in text
@@ -75,6 +75,8 @@ def test_briefing_explains_in_the_native_language(tmp_path):
         learner = store.create(f"I{level}", "en", level=level,
                                native_language="ru")
         assert needle in build_briefing(learner, ""), level
+        assert "If I%s drifts into Russian mid-lesson, answer that once in Russian" % level \
+            in build_briefing(learner, ""), level
 
 
 def test_english_native_briefing_is_unchanged(tmp_path):
@@ -82,7 +84,7 @@ def test_english_native_briefing_is_unchanged(tmp_path):
     store = LearnerStore(tmp_path / "learners")
     maria = store.create("Maria", "es", level="beginner")
     text = build_briefing(maria, "")
-    assert "brief English explanation" in text
+    assert "say what it means in English" in text
     assert "say what to express in English and have Maria say it in Spanish" in text
     assert "Their own language is English" in text
 

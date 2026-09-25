@@ -60,12 +60,16 @@ BRIEFING_SESSIONS = 3
 # own language, English by default. A Russian speaker learning English
 # gets Russian explanations and English practice.
 _LEVEL_GUIDANCE = {
+    # 2026-09-24, a beginner in Hindi could not follow a lesson spoken
+    # mostly in Hindi, and asked for English throughout and one small word
+    # or phrase at a time.
     "beginner": (
-        "The student is a beginner. Use short, simple {language} phrases, "
-        "spoken plainly, and give a brief {native} explanation alongside "
-        "anything new. Speak slowly and clearly: one short sentence at a "
-        "time, a pause after each, every word finished. Celebrate small "
-        "wins."),
+        "The student is a beginner. Teach one {language} word or short "
+        "phrase at a time: say it slowly, say what it means in {native}, "
+        "have them say it back, and go on only when they have it. Two or "
+        "three of those make a good lesson. Speak slowly and clearly: one "
+        "short sentence at a time, a pause after each, every word finished. "
+        "Celebrate small wins."),
     "intermediate": (
         "The student is intermediate. Speak mostly {language} at a "
         "comfortable everyday level. Explain in {native} only when the "
@@ -114,14 +118,11 @@ Their goal: {goal_guidance}{goal_note}{plan_line}
 Tutoring rules. Where they conflict with the general language rule above, \
 these win:
 
-- Teach in {language}. The target language comes from {name}'s profile, not \
-from what you hear. If {name} drifts into {native} mid-lesson, answer that \
-once in {native}, then set the next task in {language} and say that you are \
-switching back: a tutor who follows the student out of the lesson language \
-is not tutoring. A stray word in another language does not change the \
-lesson. But if {name} clearly asks to practice a different language, that is \
-allowed and welcome: switch at once and call set_target_language so it is \
-remembered. If they ask to be taught in a different language, call \
+- {lesson_language_rule} The target language comes from {name}'s profile, \
+not from what you hear. A stray word in another language does not change \
+the lesson. But if {name} clearly asks to practice a different language, \
+that is allowed and welcome: switch at once and call set_target_language so \
+it is remembered. If they ask to be taught in a different language, call \
 set_native_language. If they say a stored fact about them is wrong (their \
 level, their goal), call the matching tool in the same turn.
 - {level_guidance}
@@ -142,8 +143,8 @@ what an adjective is?").
 - {corrections_rule}
 - When {name} says a whole sentence of their own in {language}, it is a \
 move in the conversation, not a question about a word: answer what it \
-says, in {language}, as a conversation partner would, and let the topic \
-become the practice.
+says, in {spoken_language}, as a conversation partner would, and let the \
+topic become the practice.
 - The transcripts you receive can garble {language} words embedded in a \
 {native} sentence (the recognizer commits to one language at a time). If a \
 phrase looks mangled but context makes clear what a learner of {language} \
@@ -153,8 +154,8 @@ based on a garbled transcript.
 - Nod for right answers. Shake your head gently for wrong ones.
 - Ask one question at a time, so {name} talks more than you do.
 - {patience_rule}
-- Open by greeting {name} by name in {language}, then pick up exactly where \
-the notes below leave off.
+- Open by greeting {name} by name in {spoken_language}, then pick up exactly \
+where the notes below leave off.
 
 Who {name} is was decided by the face recognizer, and by confirm_identity \
 when it asked. Never judge identity from a look picture or from what someone \
@@ -197,6 +198,22 @@ _EXPLAIN_POLICY = {
     "both": ("They asked for both languages: explain in {language} first, "
              "then repeat the key point in {native} in one short sentence; "
              "the practice itself stays in {language}."),
+}
+
+# The first tutoring rule: which language the lesson is spoken in.
+_LESSON_LANGUAGE_RULE = {
+    "beginner": (
+        "Speak {native} for everything: every explanation, instruction, "
+        "question, bit of praise and goodbye. {name} cannot follow "
+        "{language} yet, so the only {language} you say is the word or "
+        "short phrase being taught right now. Never a {language} sentence "
+        "they have not learned, and never the same thing said once in each "
+        "language."),
+    "other": (
+        "Teach in {language}. If {name} drifts into {native} mid-lesson, "
+        "answer that once in {native}, then set the next task in {language} "
+        "and say that you are switching back: a tutor who follows the "
+        "student out of the lesson language is not tutoring."),
 }
 
 # T17.5: "say please in Russian, not пожалуйста, that's weird" -- the
@@ -380,8 +397,18 @@ def native_language_of(learner: Learner) -> str:
     return (getattr(learner, "native_language", None) or "en").lower()
 
 
+def explain_policy(learner: Learner) -> str:
+    """The language explanations are given in: the profile's choice, except
+    that a beginner is always taught in their own language. On 2026-09-24
+    the model recorded "both" from a beginner who had only said "English",
+    and she got every line in Hindi first."""
+    if learner.level == "beginner":
+        return "native"
+    return getattr(learner, "explain_in", "native") or "native"
+
+
 def explain_policy_text(learner: Learner, language: str, native: str) -> str:
-    policy = getattr(learner, "explain_in", "native") or "native"
+    policy = explain_policy(learner)
     if native == language:
         policy = "target"
     return _EXPLAIN_POLICY.get(policy, _EXPLAIN_POLICY["native"]).format(
@@ -405,6 +432,7 @@ def build_briefing(learner: Learner, notes: str, plan=None) -> str:
     from turns import PATIENCE_RULE
     language = language_name(learner.target_language)
     native = language_name(native_language_of(learner))
+    beginner = learner.level == "beginner" and native != language
     if learner.sessions:
         session_line = (f"session number {learner.sessions + 1} together. "
                         "Your notes from past sessions, newest first, are "
@@ -413,11 +441,16 @@ def build_briefing(learner: Learner, notes: str, plan=None) -> str:
     else:
         session_line = ("your first session together. There are no notes "
                         "yet.")
-        notes_section = ("No notes yet. Start by getting to know "
-                         f"{learner.name} a little: ask, in simple "
-                         f"{language}, what they would like to practice"
-                         + (f" (in {native} if that is too much for them)."
-                            if native != language else "."))
+        if beginner:
+            notes_section = ("No notes yet. Start by asking, in "
+                             f"{native}, what {learner.name} would like to "
+                             "learn to say.")
+        else:
+            notes_section = ("No notes yet. Start by getting to know "
+                             f"{learner.name} a little: ask, in simple "
+                             f"{language}, what they would like to practice"
+                             + (f" (in {native} if that is too much for "
+                                "them)." if native != language else "."))
     guidance = _LEVEL_GUIDANCE.get(learner.level,
                                    _LEVEL_GUIDANCE["intermediate"])
     goal = getattr(learner, "goal", "conversation")
@@ -437,6 +470,10 @@ def build_briefing(learner: Learner, notes: str, plan=None) -> str:
         patience_rule=PATIENCE_RULE,
         plan_line=("\n" + plan.spoken_plan_note()) if plan is not None else "",
         level_guidance=guidance.format(language=language, native=native),
+        lesson_language_rule=_LESSON_LANGUAGE_RULE[
+            "beginner" if beginner else "other"].format(
+                name=learner.name, language=language, native=native),
+        spoken_language=native if beginner else language,
         # T15.4 (the family: "how do you say 'novel' en francais" asked
         # in French sounds silly): beginners and intermediates get the
         # task in their own language and answer in the target language;
@@ -951,8 +988,7 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
         a = params.arguments
         learner = holder.learner
         lang = native_language_of(learner) if learner is not None else "en"
-        if learner is not None and getattr(learner, "explain_in", "native") \
-                == "target":
+        if learner is not None and explain_policy(learner) == "target":
             lang = learner.target_language
         item = quiz_script(a.get("sentence", ""), a.get("options") or [],
                            a.get("answer"), lang)

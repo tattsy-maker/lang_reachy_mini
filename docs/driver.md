@@ -344,11 +344,13 @@ process, `--attach` in another, no broker and no server anywhere):
   first is silently overwritten. `ReachyMiniTarget.connect()` orders it
   correctly and seeds the commanded posture from the measurement, so connecting
   never makes the robot jump.
-- **Each hosted command ends with the head going limp.** `close()` returns the
-  robot to neutral and then drops torque, so the head droops to its rest pose
-  (z about -0.043) between one-shot commands. That is the safe default for an
-  unsupervised robot; use `serve` if you want it to stay energised across many
-  commands.
+- **Each hosted command ends with the head going limp, lowered first.**
+  `close()` plays the vendor's sleep move and drops torque only once the head
+  rests at the sleep pose (z about -0.044), and logs `[reachy] asleep at rest,
+  torque off`. That is the safe default for an unsupervised robot; use `serve`
+  if you want it to stay energised across many commands. Dropping torque at
+  neutral (the old behaviour) lets the head fall under its own weight. If the
+  sleep move fails, torque stays on.
 - **The vendor daemon is a separate process** that outlives the controller and
   keeps the serial bus. That is deliberate (the next command reuses it and
   starts faster), but it means one is probably still running now. Stop it with

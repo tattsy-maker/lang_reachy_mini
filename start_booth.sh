@@ -274,6 +274,20 @@ cleanup() {
         # it anyway; stop it politely. After an unplug it holds a dead
         # serial handle, so a fresh one is the point of the restart.
         pid=$(pgrep -f "[r]eachy-mini-daemon" | head -n1)
+        # Its shutdown lifts the head to init and lowers it to sleep. When
+        # serve already laid it down, that is a second bow for nothing, so
+        # stop the robot side without it first (2026-09-24). A serve that
+        # died without parking leaves the full sleep to the daemon.
+        if [ -n "$pid" ] && fresh "$SERVE_LOG" "$SERVE_OFFSET" \
+                | grep -aq "asleep at rest, torque off"; then
+            curl -s -m 3 -X POST "${DAEMON_STATUS%/status}/stop?goto_sleep=false" \
+                > /dev/null 2>&1 || true
+            for i in $(seq 1 10); do
+                curl -s -m 2 "$DAEMON_STATUS" 2>/dev/null \
+                    | grep -q '"state":"stopped"' && break
+                sleep 1
+            done
+        fi
         # TERM: it may have inherited an ignored SIGINT (a background
         # job of this script), unlike serve and the agent it has no
         # handler of its own to override that.

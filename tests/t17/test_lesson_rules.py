@@ -28,20 +28,46 @@ from tutor_mode import (                                   # noqa: E402
 
 def test_explain_policy_follows_the_profile(tmp_path):
     store = LearnerStore(tmp_path / "learners")
-    mother = store.create("Солнышко", "en", native_language="ru", explain_in="both")
+    mother = store.create("Солнышко", "en", level="intermediate",
+                          native_language="ru", explain_in="both")
     text = build_briefing(mother, "")
     assert "They asked for both languages: explain in English first, then repeat the key point in Russian" in text
     native = store.create("Igor", "en", native_language="ru")
     assert "Every explanation, instruction and aside is in Russian" in build_briefing(native, "")
-    target = store.create("Lena", "en", native_language="ru", explain_in="target")
+    target = store.create("Lena", "en", level="advanced", native_language="ru",
+                          explain_in="target")
     assert "They asked to be taught in English" in build_briefing(target, "")
     same = store.create("Odd", "ru", native_language="ru")
     assert "They asked to be taught in Russian" in build_briefing(same, ""), "native == target"
 
 
+def test_a_beginner_is_taught_in_their_own_language(tmp_path):
+    """2026-09-24: a beginner answered "English" to the own-language and
+    explain-in question, the model recorded "both", and every line of the
+    lesson came in Hindi first."""
+    store = LearnerStore(tmp_path / "learners")
+    for explain_in in ("both", "target"):
+        pen = store.create(f"Asha{explain_in}", "hi", native_language="en",
+                           explain_in=explain_in)
+        text = build_briefing(pen, "")
+        assert "Every explanation, instruction and aside is in English" in text
+        assert "They asked" not in text, explain_in
+        assert "Speak English for everything" in text
+        assert "the only Hindi you say is the word or short phrase being taught" in text
+        assert "Teach one Hindi word or short phrase at a time" in text
+        assert "Teach in Hindi" not in text and "drifts into" not in text
+        assert f"greeting {pen.name} by name in English" in text
+        assert "ask, in simple Hindi" not in text and "Start by asking, in English" in text
+        assert "{" not in text and "}" not in text
+    # an intermediate keeps the lesson in the target language
+    mid = store.create("Mid", "hi", level="intermediate")
+    text = build_briefing(mid, "")
+    assert "Teach in Hindi" in text and "greeting Mid by name in Hindi" in text
+
+
 def test_drift_and_no_answer_in_the_question_rules(tmp_path):
     store = LearnerStore(tmp_path / "learners")
-    mother = store.create("Солнышко", "en", native_language="ru")
+    mother = store.create("Солнышко", "en", level="intermediate", native_language="ru")
     text = build_briefing(mother, "")
     assert "If Солнышко drifts into Russian mid-lesson, answer that once in Russian, then set the next task in English" in text
     assert "a tutor who follows the student out of the lesson language is not tutoring" in text
