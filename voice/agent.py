@@ -85,9 +85,12 @@ from pipecat.turns.user_stop import (                                   # noqa: 
 from pipecat.turns.user_turn_strategies import UserTurnStrategies       # noqa: E402
 from pipecat.services.anthropic.llm import AnthropicLLMService          # noqa: E402
 from pipecat.services.whisper.stt import MLXModel, WhisperSTTServiceMLX  # noqa: E402
+from pipecat.frames.frames import OutputAudioRawFrame                  # noqa: E402
 from pipecat.transports.base_input import BaseInputTransport          # noqa: E402
+from pipecat.transports.base_output import BaseOutputTransport        # noqa: E402
 from pipecat.transports.local.audio import (                            # noqa: E402
     LocalAudioInputTransport,
+    LocalAudioOutputTransport,
     LocalAudioTransport,
     LocalAudioTransportParams,
 )
@@ -137,8 +140,11 @@ from loudness import SoftClip, louder_by_db                             # noqa: 
 from audio_devices import (                                             # noqa: E402
     MIC_DEVICE_NAME,
     SPEAKER_DEVICE_NAME,
+    alsa_card_of,
     choose_audio_devices,
+    speaker_prefs,
     input_rate_for,
+    output_rate_for,
     list_audio_devices,
     parse_mic_prefs,
 )
@@ -341,8 +347,20 @@ async def wake_gently(robot) -> None:
 # 0.52, and the driver clamps whatever arrives anyway.
 # ---------------------------------------------------------------------------
 
+# The ALSA card the agent plays through, set by pick_audio_devices (the
+# robot's, or a bigger speaker's adapter since 2026-09-25).
+SPEAKER = {"card": None, "external": False}
+# Mixer controls a speaker's level may live on: the robot's card has two
+# PCM controls, USB-to-jack adapters usually "Speaker" or "PCM". amixer
+# answers the ones a card lacks with an error, which is ignored.
+VOLUME_CONTROLS = ("PCM,0", "PCM,1", "Speaker", "Headphone", "Master")
+
+
 def reachy_audio_card() -> str | None:
-    """ALSA card index of the Reachy Mini speaker, from /proc/asound/cards."""
+    """ALSA card index of the speaker in use: the one pick_audio_devices
+    chose, else the Reachy Mini's own, from /proc/asound/cards."""
+    if SPEAKER["card"] is not None:
+        return SPEAKER["card"]
     try:
         for line in open("/proc/asound/cards"):
             if "Reachy Mini Audio" in line and line.strip()[0].isdigit():
@@ -376,7 +394,7 @@ def build_audio_tools() -> list:
         percent = max(10, min(100, percent))  # never fully mute yourself
 
         def apply():
-            for control in ("PCM,0", "PCM,1"):
+            for control in VOLUME_CONTROLS:
                 subprocess.run(["amixer", "-c", card, "sset", control,
                                 f"{percent}%"], capture_output=True)
         await asyncio.to_thread(apply)
@@ -1011,12 +1029,107 @@ class ResamplingAudioInput(LocalAudioInputTransport):
                                           status)
 
 
-class ResamplingAudioTransport(LocalAudioTransport):
-    """LocalAudioTransport whose input side is a ``ResamplingAudioInput``."""
+class ResamplingAudioOutput(LocalAudioOutputTransport):
+    """PyAudio output opened at the speaker's own rate (2026-09-25: the
+    AB13X USB-to-jack adapter for a bigger speaker plays only 8 or 48 kHz
+    and answered the pipeline's 16 kHz with "Invalid sample rate"). The
+    pipeline keeps producing 16 kHz; each frame is resampled with a
+    streaming soxr resampler just before it is written. With equal rates
+    it is the stock transport.
 
-    def __init__(self, params: LocalAudioTransportParams, input_device_rate: int):
+    The resampler holds back ~16 ms (HQ); when no frame follows for
+    FLUSH_AFTER_SECS the reply has ended, and the held tail is played
+    rather than left to start the next reply.
+
+    The device is opened in stereo and the mono voice is copied to both
+    channels: opened in mono, PortAudio fills a stereo-only device's
+    second channel with silence, and the AB13X speaker stayed silent
+    (the robot's own card happens to play its left channel)."""
+
+    FLUSH_AFTER_SECS = 0.12
+
+    def __init__(self, py_audio, params, device_rate: int):
+        super().__init__(py_audio, params)
+        self._device_rate = device_rate
+        self._resampler = None
+        self._written = 0            # frames written; a flush checks it
+        self._flush_task = None
+
+    def _new_resampler(self, rate: int):
+        import soxr
+        return soxr.ResampleStream(rate, self._device_rate,
+                                   self._params.audio_out_channels,
+                                   dtype="int16", quality="HQ")
+
+    async def start(self, frame: StartFrame):
+        rate = self._params.audio_out_sample_rate or frame.audio_out_sample_rate
+        if self._device_rate == rate or self._out_stream:
+            return await super().start(frame)
+        # BaseOutputTransport.start on purpose: the direct parent's start()
+        # is exactly the open-at-pipeline-rate being replaced. The base
+        # class keeps chunking at the pipeline rate.
+        await BaseOutputTransport.start(self, frame)
+        self._sample_rate = rate
+        self._resampler = self._new_resampler(rate)
+        self._out_stream = self._py_audio.open(
+            format=self._py_audio.get_format_from_width(2),
+            channels=max(2, self._params.audio_out_channels),
+            rate=self._device_rate,
+            output=True,
+            output_device_index=self._params.output_device_index,
+        )
+        self._out_stream.start_stream()
+        await self.set_transport_ready(frame)
+
+    async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
+        if self._resampler is None or not self._out_stream:
+            return await super().write_audio_frame(frame)
+        import numpy as np
+        samples = np.frombuffer(frame.audio, dtype=np.int16)
+        channels = self._params.audio_out_channels
+        if channels > 1:
+            samples = samples.reshape(-1, channels)
+        data = self._stereo(self._resampler.resample_chunk(samples))
+        self._written += 1
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+        self._flush_task = asyncio.ensure_future(
+            self._flush_later(self._written))
+        await self.get_event_loop().run_in_executor(
+            self._executor, self._out_stream.write, data)
+        return True
+
+    def _stereo(self, samples) -> bytes:
+        """Mono -> the same voice on both channels (stereo passes)."""
+        import numpy as np
+        if samples.ndim == 1:
+            samples = np.repeat(samples[:, None], 2, axis=1)
+        return samples.tobytes()
+
+    async def _flush_later(self, written: int) -> None:
+        await asyncio.sleep(self.FLUSH_AFTER_SECS)
+        if written != self._written or not self._out_stream:
+            return                              # the reply went on
+        import numpy as np
+        channels = self._params.audio_out_channels
+        empty = np.zeros((0, channels) if channels > 1 else 0, dtype=np.int16)
+        tail = self._stereo(self._resampler.resample_chunk(empty, last=True))
+        self._resampler = self._new_resampler(self._sample_rate)
+        if tail:
+            await self.get_event_loop().run_in_executor(
+                self._executor, self._out_stream.write, tail)
+
+
+class ResamplingAudioTransport(LocalAudioTransport):
+    """LocalAudioTransport whose sides open at the devices' own rates
+    (``ResamplingAudioInput``, ``ResamplingAudioOutput``)."""
+
+    def __init__(self, params: LocalAudioTransportParams, input_device_rate: int,
+                 output_device_rate: int | None = None):
         super().__init__(params)
         self._input_device_rate = input_device_rate
+        self._output_device_rate = (output_device_rate
+                                    or params.audio_out_sample_rate)
 
     def input(self) -> FrameProcessor:
         if not self._input:
@@ -1024,9 +1137,16 @@ class ResamplingAudioTransport(LocalAudioTransport):
                                                self._input_device_rate)
         return self._input
 
+    def output(self) -> FrameProcessor:
+        if not self._output:
+            self._output = ResamplingAudioOutput(self._pyaudio, self._params,
+                                                 self._output_device_rate)
+        return self._output
 
-def pick_audio_devices(args) -> tuple[int | None, int | None, int]:
-    """Resolve (input_index, output_index, input_open_rate) and log the choice.
+
+def pick_audio_devices(args) -> tuple[int | None, int | None, int, int]:
+    """Resolve (input_index, output_index, input_open_rate,
+    output_open_rate) and log the choice.
 
     Booth rule: the USB mic when one is plugged in (``--mic-device``, tried
     in order), else the robot's own mic; the speaker is always the robot's
@@ -1036,7 +1156,8 @@ def pick_audio_devices(args) -> tuple[int | None, int | None, int]:
     """
     prefs = parse_mic_prefs(args.mic_device)
     devices = list_audio_devices()
-    choice = choose_audio_devices(devices, prefs, args.audio_device)
+    speakers = speaker_prefs(args.speaker_device, args.audio_device, prefs)
+    choice = choose_audio_devices(devices, prefs, args.audio_device, speakers)
     if args.input_device is not None:
         in_idx = args.input_device
         logger.info("audio: mic index %d forced by --input-device", in_idx)
@@ -1060,8 +1181,12 @@ def pick_audio_devices(args) -> tuple[int | None, int | None, int]:
             logger.warning("audio: no speaker matching %r; PyAudio's default "
                            "output will be used", args.audio_device)
         else:
-            logger.info("audio: speaker %r (index %d)", choice.output.name,
-                        out_idx)
+            logger.info("audio: speaker %r (index %d)%s", choice.output.name,
+                        out_idx, "" if choice.output_fallback else
+                        " -- not the robot's own, so its echo is not "
+                        "cancelled at the robot's mic (barge-in weaker)")
+            SPEAKER["card"] = alsa_card_of(choice.output.name)
+            SPEAKER["external"] = not choice.output_fallback
     in_rate = args.sample_rate
     if in_idx is not None and devices:
         in_rate = input_rate_for(in_idx, args.sample_rate,
@@ -1069,7 +1194,13 @@ def pick_audio_devices(args) -> tuple[int | None, int | None, int]:
         if in_rate != args.sample_rate:
             logger.info("audio: mic opens at %d Hz, resampling to %d Hz",
                         in_rate, args.sample_rate)
-    return in_idx, out_idx, in_rate
+    out_rate = args.sample_rate
+    if out_idx is not None and devices:
+        out_rate = output_rate_for(out_idx, args.sample_rate)
+        if out_rate != args.sample_rate:
+            logger.info("audio: speaker opens at %d Hz, resampling from %d "
+                        "Hz", out_rate, args.sample_rate)
+    return in_idx, out_idx, in_rate, out_rate
 
 
 # ---------------------------------------------------------------------------
@@ -1151,7 +1282,7 @@ async def run(args) -> None:
 
     # -- audio device ------------------------------------------------------
     # USB mic if present, else the robot's own; speaker always the robot's.
-    in_idx, out_idx, in_rate = pick_audio_devices(args)
+    in_idx, out_idx, in_rate, out_rate = pick_audio_devices(args)
 
     # --deaf: never open the microphone. Scripted --say runs otherwise pick
     # up room noise as phantom user turns (Whisper will happily transcribe a
@@ -1163,7 +1294,7 @@ async def run(args) -> None:
         audio_out_sample_rate=args.sample_rate,
         input_device_index=in_idx,
         output_device_index=out_idx,
-    ), input_device_rate=in_rate)
+    ), input_device_rate=in_rate, output_device_rate=out_rate)
 
     # Both run on this machine. Whisper goes through MLX, so transcription is
     # on the Apple-Silicon GPU rather than the CPU; Kokoro synthesises through
@@ -1530,6 +1661,11 @@ emit the tool call in that same turn, alongside anything you say.""".format(
     mute_strategies = []
     if not args.no_mute:
         mute_strategies = [AlwaysUserMuteStrategy(), FunctionCallUserMuteStrategy()]
+        if SPEAKER["external"]:
+            # Not echo-cancelled at the robot's mic: also mute while the
+            # room still rings after each reply (barge_in.py).
+            from barge_in import make_tail_strategy
+            mute_strategies.append(make_tail_strategy())
 
     if args.speech == "local":
         aggregators = LLMContextAggregatorPair(
@@ -1550,7 +1686,13 @@ emit the tool call in that same turn, alongside anything you say.""".format(
         # 2026-09-25 (--barge-in): the mute opens mid-reply when the mic
         # hears someone clearly louder than the robot's own echo, and
         # Gemini's own interruption handling does the rest (barge_in.py).
-        if args.barge_in and not args.no_mute:
+        if args.barge_in and SPEAKER["external"]:
+            # 2026-09-25: with the bigger speaker the robot's own voice
+            # opened the gate half a second into every reply.
+            logger.info("barge-in: off -- the speaker is not the robot's "
+                        "own, so the mic cannot tell its voice from a "
+                        "visitor's; the robot always finishes")
+        elif args.barge_in and not args.no_mute:
             from barge_in import make_strategy
             mute_strategies = [make_strategy(margin_db=args.barge_in_margin_db),
                                FunctionCallUserMuteStrategy()]
@@ -1888,6 +2030,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="preferred microphone(s): comma-separated name "
                         "substrings tried in order, falling back to the "
                         "--audio-device mic; '' means always the fallback")
+    g.add_argument("--speaker-device", default="",
+                   help="preferred speaker(s): comma-separated name "
+                        "substrings tried in order, or 'auto' for any USB "
+                        "sound card other than the robot's and the mic's; "
+                        "falls back to the --audio-device speaker")
     g.add_argument("--audio-in-channels", type=int, default=1,
                    help="channels to open the mic with")
     g.add_argument("--input-device", type=int, default=None,

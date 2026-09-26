@@ -158,3 +158,44 @@ def make_strategy(margin_db: float = DEFAULT_MARGIN_DB,
             return self._bot_speaking and not self.gate.open
 
     return EchoGatedUserMuteStrategy()
+
+
+# 2026-09-25, evening: a bigger speaker on a USB-to-jack adapter. The
+# robot's own speaker is echo-cancelled at its mic by the XVF3800 board;
+# another speaker is not, and its sound reached the desk mic at -3 dBFS,
+# as loud as any visitor. No level gate can tell the two apart, so the
+# agent turns barge-in off on such a speaker (the robot opened the gate
+# on its own voice half a second into each reply, over and over) and
+# keeps the mic shut a moment longer after each reply, while the room
+# still rings with the last word.
+DEFAULT_TAIL_SECS = 0.25
+
+
+def make_tail_strategy(tail_secs: float = DEFAULT_TAIL_SECS):
+    """A pipecat user-mute strategy that stays muted ``tail_secs`` after
+    the robot stops speaking (use with AlwaysUserMuteStrategy)."""
+    import time
+    from pipecat.frames.frames import (
+        BotStartedSpeakingFrame, BotStoppedSpeakingFrame,
+    )
+    from pipecat.turns.user_mute.base_user_mute_strategy import (
+        BaseUserMuteStrategy,
+    )
+
+    class TailUserMuteStrategy(BaseUserMuteStrategy):
+        """Muted for a short tail after each reply."""
+
+        def __init__(self):
+            super().__init__()
+            self.tail_secs = tail_secs
+            self._until = 0.0
+
+        async def process_frame(self, frame) -> bool:
+            await super().process_frame(frame)
+            if isinstance(frame, BotStartedSpeakingFrame):
+                self._until = 0.0
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                self._until = time.monotonic() + self.tail_secs
+            return time.monotonic() < self._until
+
+    return TailUserMuteStrategy()

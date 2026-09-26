@@ -61,9 +61,17 @@
 #                       the mixer's top). set_volume changes it during a
 #                       visit; every start puts it back here.
 #   BOOTH_LOUDNESS_DB   louder than the mixer can go: soft-clip drive on
-#                       the robot's speech (default 12 = about 8 dB
-#                       louder; 9 = about 6.5, 0 = off). Turn it down if
-#                       the voice sounds harsh (voice/loudness.py).
+#                       the robot's speech (default 0 = off since
+#                       2026-09-25, evening: a bigger speaker does the
+#                       volume; 12 = about 8 dB louder on the robot's own
+#                       speaker, 9 = about 6.5; voice/loudness.py).
+#   BOOTH_SPEAKER_DEVICE  where the robot's voice plays: auto (default) =
+#                       any other USB sound card that can play, e.g. a
+#                       USB-to-jack adapter for a bigger speaker, else the
+#                       robot's own; or name substrings, comma-separated;
+#                       '' = always the robot's. Only the robot's own
+#                       speaker has its echo cancelled at the robot's mic,
+#                       so barge-in mostly stops working on another one.
 #   BOOTH_EXTRA_AGENT   extra flags appended to the agent command
 #   BOOTH_SERVICE       1 = unattended (systemd, booth/reachy-booth.service):
 #                       wait for the robot, camera and network instead of
@@ -100,7 +108,8 @@ TURN_PATIENCE_MS="${BOOTH_TURN_PATIENCE_MS:-1200}"
 TURN_ONSET_MS="${BOOTH_TURN_ONSET_MS:-100}"
 CALL_OUT_SECS="${BOOTH_CALL_OUT_SECS:-40}"
 SPEECH_RATE="${BOOTH_SPEECH_RATE:-1.0}"
-LOUDNESS_DB="${BOOTH_LOUDNESS_DB:-12}"
+LOUDNESS_DB="${BOOTH_LOUDNESS_DB:-0}"
+SPEAKER_DEVICE="${BOOTH_SPEAKER_DEVICE-auto}"
 ZENOH_LISTEN="tcp/0.0.0.0:7447"
 BROKER="zenoh://127.0.0.1:7447"
 SERVICE="${BOOTH_SERVICE:-}"
@@ -162,9 +171,38 @@ grep -qs . /proc/asound/cards && ok "sound card visible" \
 # The robot's speaker at a known level (2026-09-23: one visitor's "louder"
 # or "quieter" used to carry over to every visitor after them).
 VOLUME="${BOOTH_VOLUME:-100}"
-card=$(awk -v d="$AUDIO_DEVICE" 'index($0, d) {print $1; exit}' /proc/asound/cards)
-if [ -n "$card" ] && amixer -c "$card" sset PCM,0 "$VOLUME%" >/dev/null 2>&1; then
-    amixer -c "$card" sset PCM,1 "$VOLUME%" >/dev/null 2>&1
+# The card the agent will play through (voice/audio_devices.py makes the
+# same pick): BOOTH_SPEAKER_DEVICE, else the robot's.
+speaker_card() {
+    local name
+    if [ "$SPEAKER_DEVICE" = auto ]; then
+        awk -F'[][]' '/USB-Audio/ {print $1}' /proc/asound/cards 2>/dev/null \
+            | while read -r n; do
+                line=$(grep -E "^ *$n \[" /proc/asound/cards)
+                case "$line" in *"$AUDIO_DEVICE"*) continue ;; esac
+                [ -n "$MIC_DEVICE" ] && case "$line" in *"$MIC_DEVICE"*) continue ;; esac
+                ls /proc/asound/card"$n"/pcm*p >/dev/null 2>&1 && { echo "$n"; break; }
+            done
+    elif [ -n "$SPEAKER_DEVICE" ]; then
+        echo "$SPEAKER_DEVICE" | tr ',' '\n' | while read -r name; do
+            [ -n "$name" ] || continue
+            n=$(awk -v d="$name" 'index($0, d) && /^ *[0-9]/ {print $1; exit}' /proc/asound/cards)
+            [ -n "$n" ] && { echo "$n"; break; }
+        done
+    fi
+}
+card=$(speaker_card | head -n1)
+if [ -n "$card" ]; then
+    ok "speaker: $(awk -v n="$card" '$1 == n {sub(/.* - /, ""); print; exit}' /proc/asound/cards) (card $card) -- not the robot's, barge-in weaker"
+else
+    card=$(awk -v d="$AUDIO_DEVICE" 'index($0, d) {print $1; exit}' /proc/asound/cards)
+fi
+set_any=
+for control in PCM,0 PCM,1 Speaker Headphone Master; do
+    [ -n "$card" ] && amixer -c "$card" sset "$control" "$VOLUME%" >/dev/null 2>&1 \
+        && set_any=1
+done
+if [ -n "$set_any" ]; then
     ok "speaker volume $VOLUME% (card $card)"
 else
     warn "could not set the speaker volume"
@@ -287,6 +325,7 @@ voice/.venv/bin/python voice/agent.py \
     --broker "$BROKER" \
     "${MODEL_FLAGS[@]}" \
     --audio-device "$AUDIO_DEVICE" \
+    --speaker-device "$SPEAKER_DEVICE" \
     --mic-device "$MIC_DEVICE" \
     --persona "$PERSONA" \
     "${SESSION_FLAGS[@]}" \

@@ -163,7 +163,10 @@ default), `BOOTH_TURN_ONSET_MS` (T19.8: speech before a turn starts,
 default 100), `BOOTH_CALL_OUT_SECS` (T19.9: invite an onlooker over,
 at most this often, default 40; 0 = off), `BOOTH_SPEECH_RATE` (T17.10: play
 replies slower, pitch kept; default 1.0 = off), `BOOTH_LOUDNESS_DB`
-(T18.1: soft-clip drive, default 12 = about 8 dB louder; 0 = off),
+(T18.1: soft-clip drive; default 0 = off since 2026-09-25 evening, 12
+= about 8 dB louder on the robot's own speaker), `BOOTH_SPEAKER_DEVICE`
+(`auto` default: a USB-to-jack adapter for a bigger speaker when one is
+plugged in, else the robot's; `''` = always the robot's),
 `BOOTH_ONBOARDING` (T18.3: `quick` default, `full` = the T17.4
 interview), `BOOTH_ATTRACT_EVERY` (T18.4: seconds from one idle move's
 start to the next, default 12; `BOOTH_ATTRACT_SECS` now defaults to 5),
@@ -483,7 +486,28 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   soft clip, `voice/loudness.py` has the measurements); if the voice
   sounds harsh, lower `BOOTH_LOUDNESS_DB` (9 is about +6.5 dB, 6 about
   +4.5, on Gemini 3.1's audio). `grep "loudness:" voice/run.log` shows
-  what a run used.
+  what a run used. Since the evening of 2026-09-25 the booth plays with
+  no software gain and gets its volume from a bigger speaker instead.
+- **Another speaker costs barge-in (2026-09-25).** `--speaker-device`
+  (booth: `auto`) plays through any other USB sound card, e.g. a
+  USB-to-jack adapter; `grep "audio: speaker"` says which, and flags one
+  that is not the robot's. The robot's mic hears the robot at -55 to -68
+  dBFS only because its XVF3800 board cancels the echo of what *it*
+  plays; a separate speaker's sound reaches the mic at full level, the
+  echo gate raises its threshold to match, and visitors can rarely talk
+  over the robot. Set volume and `set_volume` act on whichever card
+  plays (PCM/Speaker/Headphone/Master, whichever it has). The AB13X
+  jack adapter plays only stereo at 8 or 48 kHz (`cat
+  /proc/asound/cardN/stream0`): `ResamplingAudioOutput` opens it at 48
+  kHz in stereo with the voice on both channels (opened in mono,
+  PortAudio silences the second channel). Measured 2026-09-25 with the
+  desk mic: the robot's voice from the big speaker reads -3 dBFS. The
+  echo gate then opened on the robot's own voice half a second into
+  every reply (its echo estimate collapsed as replies got cut short),
+  so on any speaker that is not the robot's the agent now turns
+  barge-in off (`barge-in: off -- the speaker is not the robot's own`)
+  and keeps the mic muted 0.25 s after each reply
+  (`barge_in.make_tail_strategy`).
 - **A language missing from the prompt gets refused (2026-09-25).** The
   base prompt says to refuse any language it does not list; cloud mode
   listed eight plus "most other languages", and Gemini told a visitor
@@ -523,7 +547,9 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   past the last face, and only a face re-arms "still there?". Without
   the flag, T13.2's home behaviour stands.
 - **Barge-in (`--barge-in`, booth on) needs a mic that can tell the
-  robot from the visitor.** Cloud mode swaps `AlwaysUserMuteStrategy`
+  robot from the visitor.** The robot's own mic can (its board cancels
+  the robot's echo: -55 to -68 dBFS, barge-ins seen working end to end
+  on 2026-09-25, 17:43-18:08); the desk mic cannot. Cloud mode swaps `AlwaysUserMuteStrategy`
   for `barge_in.EchoGatedUserMuteStrategy`: mid-reply the mic opens when
   it hears a voice `--barge-in-margin-db` (10) above the robot's own
   echo, and Gemini interrupts itself. With the desk mic's Auto Gain

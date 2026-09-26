@@ -1365,3 +1365,10 @@ rises and then snaps the head right-down; the greeting came out as
   the metal: the wake-up without the vendor's (the daemon flag), the
   slowed clips, a call-out. Open: whether 1200 ms patience cuts off
   someone thinking mid-sentence (read `heard:` lines).
+- 2026-09-25 (late) — no software gain by default (`BOOTH_LOUDNESS_DB`
+  0): a bigger speaker on a USB-to-jack adapter will do the volume
+  (`--speaker-device`, booth `auto`; volume set on that card). Barge-in
+  confirmed working with the robot's own mic (its XVF3800 cancels the
+  robot's echo to -55..-68 dBFS; gate open -> Gemini interrupted 0.3 s
+  later -> playback stopped). An external speaker is outside that echo
+  cancellation, so barge-in will mostly stop triggering on it.
