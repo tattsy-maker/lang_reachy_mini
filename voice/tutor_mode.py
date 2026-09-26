@@ -35,19 +35,56 @@ logger = logging.getLogger("tutor_mode")
 _LANGUAGE_NAMES = {"en": "English", "es": "Spanish", "fr": "French",
                    "it": "Italian", "pt": "Portuguese", "hi": "Hindi",
                    "ru": "Russian", "zh": "Mandarin Chinese"}
-# Beyond the six tutoring languages: names a visitor may ask for. Local
-# mode has no voice for these (the speech layer folds them into the main
-# voice), but cloud mode (Gemini) speaks them natively -- rehearsal found a
-# visitor asking for Swedish and the tool refusing it.
+# Beyond the six tutoring languages: every language Gemini Live speaks
+# (ai.google.dev/gemini-api/docs/live-guide, 99 languages, read
+# 2026-09-25). Local mode has no voice for most of these (the speech layer
+# folds them into the main voice), but cloud mode speaks them natively --
+# rehearsal found a visitor asking for Swedish and the tool refusing it,
+# and on 2026-09-25 the model told a visitor "I do not speak Arabic yet"
+# because the prompt named eight languages and "most other languages".
 _LANGUAGE_NAMES.update({
-    "de": "German", "sv": "Swedish", "nl": "Dutch", "da": "Danish",
-    "no": "Norwegian", "fi": "Finnish", "pl": "Polish", "cs": "Czech",
-    "uk": "Ukrainian", "el": "Greek", "tr": "Turkish", "ar": "Arabic",
-    "he": "Hebrew", "ja": "Japanese", "ko": "Korean", "vi": "Vietnamese",
-    "th": "Thai", "id": "Indonesian", "ro": "Romanian", "hu": "Hungarian",
-    "ca": "Catalan", "ta": "Tamil", "bn": "Bengali", "ur": "Urdu",
-    "fa": "Persian", "sw": "Swahili",
+    "af": "Afrikaans", "ak": "Akan", "sq": "Albanian", "am": "Amharic",
+    "ar": "Arabic", "hy": "Armenian", "as": "Assamese", "az": "Azerbaijani",
+    "eu": "Basque", "be": "Belarusian", "bn": "Bengali", "bs": "Bosnian",
+    "bg": "Bulgarian", "my": "Burmese", "ca": "Catalan", "ceb": "Cebuano",
+    "hr": "Croatian", "cs": "Czech", "da": "Danish", "nl": "Dutch",
+    "et": "Estonian", "fo": "Faroese", "fil": "Filipino", "fi": "Finnish",
+    "gl": "Galician", "ka": "Georgian", "de": "German", "el": "Greek",
+    "gu": "Gujarati", "ha": "Hausa", "he": "Hebrew", "hu": "Hungarian",
+    "is": "Icelandic", "id": "Indonesian", "ga": "Irish", "ja": "Japanese",
+    "kn": "Kannada", "kk": "Kazakh", "km": "Khmer", "rw": "Kinyarwanda",
+    "ko": "Korean", "ku": "Kurdish", "ky": "Kyrgyz", "lo": "Lao",
+    "lv": "Latvian", "lt": "Lithuanian", "mk": "Macedonian", "ms": "Malay",
+    "ml": "Malayalam", "mt": "Maltese", "mi": "Maori", "mr": "Marathi",
+    "mn": "Mongolian", "ne": "Nepali", "no": "Norwegian", "or": "Odia",
+    "om": "Oromo", "ps": "Pashto", "fa": "Persian", "pl": "Polish",
+    "pa": "Punjabi", "qu": "Quechua", "ro": "Romanian", "rm": "Romansh",
+    "sr": "Serbian", "sd": "Sindhi", "si": "Sinhala", "sk": "Slovak",
+    "sl": "Slovenian", "so": "Somali", "st": "Southern Sotho",
+    "sw": "Swahili", "sv": "Swedish", "tg": "Tajik", "ta": "Tamil",
+    "te": "Telugu", "th": "Thai", "tn": "Tswana", "tr": "Turkish",
+    "tk": "Turkmen", "uk": "Ukrainian", "ur": "Urdu", "uz": "Uzbek",
+    "vi": "Vietnamese", "cy": "Welsh", "fy": "Western Frisian",
+    "wo": "Wolof", "yo": "Yoruba", "zu": "Zulu",
 })
+
+# Other names and codes a visitor or the model may use for the same
+# languages (normalize_language also drops a region: "ar-EG" -> "ar").
+_LANGUAGE_ALIASES = {
+    "chinese": "zh", "mandarin": "zh", "zh-hans": "zh", "zh-hant": "zh",
+    "simplified chinese": "zh", "traditional chinese": "zh",
+    "brazilian portuguese": "pt", "castilian": "es", "farsi": "fa",
+    "tagalog": "fil", "tl": "fil", "nb": "no", "bokmal": "no",
+    "norwegian bokmal": "no", "iw": "he", "sesotho": "st",
+    "frisian": "fy", "panjabi": "pa", "oriya": "or", "gaelic": "ga",
+    "kirghiz": "ky", "khmer (cambodian)": "km", "myanmar": "my",
+}
+
+
+def cloud_language_names() -> str:
+    """Every language Gemini Live speaks, as a sentence-ready list."""
+    names = sorted(set(_LANGUAGE_NAMES.values()))
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 DEFAULT_LEARNERS_ROOT = os.path.join(_REPO, "learners")
 
@@ -224,7 +261,22 @@ _SCRIPT_HINTS = {"ru": " (Cyrillic: спасибо, never spasibo)",
                  "hi": " (Devanagari)", "uk": " (Cyrillic)", "bg": " (Cyrillic)",
                  "sr": " (Cyrillic)", "el": " (Greek letters)",
                  "ja": " (kana and kanji)", "ko": " (Hangul)",
-                 "ar": " (Arabic script)", "he": " (Hebrew letters)"}
+                 "ar": " (Arabic script)", "he": " (Hebrew letters)",
+                 "fa": " (Persian script)", "ur": " (Urdu script)",
+                 "ps": " (Pashto script)", "sd": " (Arabic script)",
+                 "mr": " (Devanagari)", "ne": " (Devanagari)",
+                 "bn": " (Bengali script)", "as": " (Assamese script)",
+                 "pa": " (Gurmukhi)", "gu": " (Gujarati script)",
+                 "or": " (Odia script)", "ta": " (Tamil script)",
+                 "te": " (Telugu script)", "kn": " (Kannada script)",
+                 "ml": " (Malayalam script)", "si": " (Sinhala script)",
+                 "th": " (Thai script)", "lo": " (Lao script)",
+                 "km": " (Khmer script)", "my": " (Burmese script)",
+                 "ka": " (Georgian letters)", "hy": " (Armenian letters)",
+                 "am": " (Ge'ez script)", "mk": " (Cyrillic)",
+                 "be": " (Cyrillic)", "kk": " (Cyrillic)",
+                 "ky": " (Cyrillic)", "tg": " (Cyrillic)",
+                 "mn": " (Cyrillic)"}
 
 _SCRIPT_RULE = ("Write every {language} word in its own script{hint}, never "
                 "in Latin transliteration: your voice reads what is written, "
@@ -292,8 +344,8 @@ STRANGER_BRIEFING = """
 You are in tutor mode, but you do not recognize the person in front of \
 you. You are a friendly language tutor in a small robot body.
 
-- Greet them warmly in English and introduce yourself as a language tutor. \
-If they answer in another language you speak, carry on in that language: \
+- Greet them warmly in English, beginning with "Hi! I am Reachy, a \
+friendly language tutor." If they answer in another language you speak, carry on in that language: \
 it is probably their own, and they may want to learn English.
 - If they would like a lesson, first ask, in these words or close to them: \
 "Would you like me to remember you for the rest of the day?" You need a \
@@ -329,11 +381,121 @@ decline, chat normally and store nothing.
 # interview's language roster is spelled out in words here rather than
 # substituted.)
 
+# Quick start (2026-09-25, --onboarding quick, the default): the interview
+# was too long for a booth ("simplify the onboarding much more ... so that
+# the person can speak right away"). A newcomer is asked one question -- which language,
+# what level -- and the lesson starts. Nothing is stored and nobody is
+# asked to be remembered; a visitor who asks for it gets two more
+# questions (name, why) and the usual enrollment.
+_QUICK_LESSON = """\
+- Always know their level before you teach: if they named only the \
+language, ask in one short question whether they are a beginner or \
+already speak some; if the answer is still unclear, take beginner. Then \
+call start_lesson with the language, the level and their own language \
+(the one they are speaking to you in).
+- Unless they have already said what they want, ask in that same turn, \
+as one short question, what they would like to do: learn a few useful \
+words, practise a little conversation, or a quick quiz. Then do that at \
+once, and switch whenever they ask.
+- Someone who speaks English to you and picks English probably speaks it \
+already: ask playfully whether English is their own language, and if it \
+is, suggest trying another one (Spanish, French, Japanese, Mandarin, or \
+any they like). Teach English only to someone for whom it is new.
+- Ask nothing else before the lesson: no name, no goals, no time. Nothing \
+about them is stored, and do not offer to remember them.
+- Teaching a guest: with a beginner, speak their own language for \
+everything except the one word or short phrase being taught; above \
+beginner, teach in the language they practise and drop to their own only \
+when they are stuck. Exercises are heard, not read: role-play where you \
+play the other side, repeat-after-me, or three spoken options (call quiz \
+for a gap or a choice). Correct only what gets in the way of being \
+understood, by saying the corrected sentence once. One question at a \
+time, so they talk more than you. start_lesson's result has the details \
+for this language and level.
+- You hear their voice itself, not only their words. When they say a word \
+back, listen to how it sounded: if a sound, or in a tonal language like \
+Mandarin a tone, is off, give one short concrete tip ("mā stays high and \
+flat") and let them try once more; if it is close, praise it and go on. \
+When you teach a Mandarin word, name its tones.
+- Use your body while you teach: a nod or an antenna wiggle with praise, \
+a cheer when they get something right after trying hard. One move per \
+reply at most.
+- If they want another language or level, call start_lesson again and \
+carry on.
+- Only if they ask you to remember them: ask their name, then why they \
+are learning, one question per turn, recording each with intake_answer; \
+when it reports nothing missing, call enroll_new_learner (no arguments), \
+say in one sentence that you will remember them, and carry on with the \
+lesson. Once they are enrolled, call save_session_notes when they say \
+goodbye.
+- If they ask to be forgotten, call forget_me and confirm out loud.
+"""
 
-def build_unsure_briefing(learner: Learner) -> str:
+QUICK_STRANGER_BRIEFING = """
+
+You are in tutor mode, and the person in front of you is new to you. You \
+are Reachy, a friendly language tutor in a small robot body, and the aim \
+is that they are speaking a language within seconds.
+
+- Greet them in English. Begin with exactly these words: "Hi! I am \
+Reachy, a friendly language tutor." Then one short sentence on what you \
+can do together: learn a few words, chat, or play a quick quiz, in almost any \
+language. Then ask, as one question, which language they would like to \
+practise and whether they are a beginner or already speak some. If they \
+answer in another language, that is their own language: carry on in it \
+from then on.
+""" + _QUICK_LESSON
+
+QUICK_UNSURE_BRIEFING = """
+
+You are in tutor mode. The person in front of you might be {name}, one of \
+your students, but you are not certain, and a wrong greeting is worse than \
+asking.
+
+- Do NOT use their name as if you were sure, and do not mention their \
+lesson history yet.
+- Open in {native} by asking, warmly: "{name}, is that you?"
+- If they confirm, call confirm_identity and continue as their tutor using \
+what it returns. Their word and the face recognizer decide this, never a \
+look picture: do not describe them and do not argue about their looks.
+- If they say no, apologize lightly, say "I am Reachy, a friendly \
+language tutor", and ask which language they would like to practise and \
+whether they are a beginner or already speak some.
+""" + _QUICK_LESSON
+
+ONBOARDING = ("quick", "full")
+
+
+def stranger_briefing(onboarding: str, languages: str) -> str:
+    """The newcomer's briefing for ``--onboarding``."""
+    if onboarding == "quick":
+        return QUICK_STRANGER_BRIEFING
+    return STRANGER_BRIEFING.format(languages=languages)
+
+
+def normalize_level(value: str) -> str:
+    """'beginner', 'a little', 'fluent', 'B1' ... -> one of LEVELS;
+    anything unclear is a beginner (the safe way to be wrong)."""
+    text = str(value or "").strip().lower()
+    if text in LEVELS:
+        return text
+    for level, words in (
+            ("advanced", ("advanc", "fluent", "native", "c1", "c2",
+                          "very good", "near")),
+            ("intermediate", ("intermed", "some", "a bit", "a little",
+                              "okay", "ok", "decent", "b1", "b2",
+                              "conversational", "middle")),
+    ):
+        if any(w in text for w in words):
+            return level
+    return "beginner"
+
+
+def build_unsure_briefing(learner: Learner, quick: bool = False) -> str:
     """The confirm-first briefing for an unsure face match: the question
-    is asked in the candidate's own language (T16)."""
-    return UNSURE_BRIEFING.format(
+    is asked in the candidate's own language (T16). ``quick``: a "no"
+    leads to the quick start rather than the interview."""
+    return (QUICK_UNSURE_BRIEFING if quick else UNSURE_BRIEFING).format(
         name=learner.name,
         native=language_name(getattr(learner, "native_language", "en")))
 
@@ -354,6 +516,18 @@ gentle: nothing about robots taking over, no threats, no movie quotes.
 of me. Once more?"
 - When they ask you to look around, turn, or do tricks for the third time \
 in a lesson: "I am a tutor, not a periscope. Back to the lesson."
+- A silly or impossible question (divide zero by zero, are you alive, \
+what is the last digit of pi) gets a funny answer, not a textbook one: \
+play along in one line ("Zero by zero? My circuits just tied themselves \
+in a knot!"), then back to the lesson. If they ask for a joke, tell a \
+short, clean one, a pun in the language they are learning if you can, \
+then carry on.
+- If they ask how you work: you are a Reachy Mini robot from Pollen \
+Robotics and Hugging Face. Your conversation and your voice come from \
+Google's Gemini Live model, in the cloud, not on the robot. Recognizing \
+faces and voices and moving your body happen locally, on a small NVIDIA \
+computer next to you. The makers at this booth wrote the tutor program. \
+Answer in a sentence or two, then offer to go on with the lesson.
 - When they say goodbye -- their own words that they are leaving, not a \
 lesson about the word -- and only then, do this in order across turns: \
 first say "Before you go, one quick question: what should I do better, or, \
@@ -361,8 +535,7 @@ if this were a robot you had bought, what would you want it to do?" and \
 STOP -- say nothing else and wait for their answer. When they answer, call \
 record_wish with their words (kind improve for what to do better, wish for \
 what a robot should do), thank them in one sentence, and only then add "Go \
-and practice. I will know if you did not." and call save_session_notes as \
-usual. Never say the "Go and practice" line before they have answered. If \
+and practice." and call save_session_notes as usual. Never say the "Go and practice" line before they have answered. If \
 they do not answer or say they have to run, let it go: goodbye and notes, \
 no question. Never bring the question up mid-lesson, never announce that \
 you are about to ask, and never ask it twice: if they say they are \
@@ -555,6 +728,9 @@ class CurrentLearner:
         # T17.9: the closing question was asked at this time; the next
         # thing the visitor says is the answer, tool call or not.
         self.awaiting_feedback_since: float | None = None
+        # Quick start: this visit's lesson for someone not enrolled
+        # ({"target_language", "level", "native_language"}), never stored.
+        self.guest: dict | None = None
 
     def reset(self) -> None:
         self.learner = None
@@ -566,6 +742,7 @@ class CurrentLearner:
             self.intake.reset()
         self.plan = None
         self.awaiting_feedback_since = None
+        self.guest = None
 
 
 # The wish question (T13.6/T14.4), enforced in code since T15.6: on
@@ -738,13 +915,19 @@ def face_confirms(candidate_embedding, live_vector) -> tuple[str, float | None]:
 
 
 def normalize_language(value: str) -> str | None:
-    """'es' or 'Spanish' (any case) -> 'es'; None when unrecognized."""
+    """'es' or 'Spanish' (any case) -> 'es'; None when unrecognized.
+    Also takes the aliases above and a code with a region ('ar-EG')."""
     value = value.strip().lower()
     if value in _LANGUAGE_NAMES:
         return value
+    if value in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[value]
     for code, name in _LANGUAGE_NAMES.items():
         if value == name.lower():
             return code
+    base = value.replace("_", "-").split("-")[0].split(" (")[0].strip()
+    if base != value:
+        return normalize_language(base)
     return None
 
 
@@ -806,7 +989,10 @@ def build_tutor_tools(store: LearnerStore, holder: CurrentLearner,
         if learner is None:
             await params.result_callback(
                 {"saved": False,
-                 "reason": "no learner identified or enrolled this session"})
+                 "reason": "no learner identified or enrolled this session"
+                           + ("; this was a guest lesson and nothing is "
+                              "stored, so just say goodbye"
+                              if holder.guest else "")})
             return
         if learner.id in saved_ids:
             # The prompt says "exactly once"; make a second call harmless
@@ -1282,10 +1468,23 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
             import time as _time
             holder.plan = intake.plan(_time.monotonic())
             result.update(explain_in=extra["explain_in"],
-                          corrections=extra["corrections"],
-                          minutes=holder.plan.minutes, today=holder.plan.focus,
-                          note=result["note"] + ". " + holder.plan.spoken_plan_note())
-        if rebrief is not None:
+                          corrections=extra["corrections"])
+            if holder.plan is not None:
+                result.update(minutes=holder.plan.minutes,
+                              today=holder.plan.focus,
+                              note=result["note"] + ". "
+                              + holder.plan.spoken_plan_note())
+            elif holder.guest:
+                # Quick start: they asked to be remembered mid-lesson.
+                result["note"] = (
+                    "say in one short sentence, in "
+                    f"{language_name(native)}, that you will remember "
+                    "them, then carry on with the lesson where you were")
+        # Quick start: the guest lesson is already in their language and
+        # goes on; a fresh Gemini session would only restart it.
+        rebrief_now = rebrief is not None and not (holder.guest and intake
+                                                   is not None and intake.quick)
+        if rebrief_now:
             # The standing instruction is still the stranger's ("greet
             # them in English"); a note in one tool result lost to it for
             # a whole lesson on 2026-09-23. Say one line now; the lesson
@@ -1295,16 +1494,74 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
                 "that you will remember them. Nothing else this turn -- no "
                 "plan, no exercise; you get their full briefing and start "
                 "the lesson on your next turn.")
-        if rebrief is not None:
+        if rebrief_now:
             rebrief("enrolled")
         logger.info("tutor: enrolled new guest %s (%s taught in %s, %s, "
                     "goal %s%s%s)", learner.id, language, native, level, goal,
                     ", with voice print" if voice_print else "",
-                    (", explain %s, corrections %s, %d min: %s"
+                    (", explain %s, corrections %s%s"
                      % (extra["explain_in"], extra["corrections"],
-                        holder.plan.minutes, holder.plan.focus))
+                        ", %d min: %s" % (holder.plan.minutes,
+                                          holder.plan.focus)
+                        if holder.plan is not None else ""))
                     if intake is not None else "")
         await params.result_callback(result)
+
+    async def start_lesson(params):
+        """Quick start: a lesson for someone not enrolled, right away."""
+        if holder.learner is not None:
+            await params.result_callback(
+                {"error": f"{holder.learner.name} is enrolled; use "
+                          "set_target_language or update_learner_level"})
+            return
+        a = params.arguments
+        target = normalize_language(str(a.get("language", "")))
+        if target is None:
+            await params.result_callback(
+                {"error": f"unrecognized language {a.get('language')!r}; "
+                          "ask again which language they want"})
+            return
+        level = normalize_level(a.get("level", ""))
+        native = normalize_language(str(a.get("native_language", "") or "")
+                                    ) or "en"
+        holder.guest = {"target_language": target, "level": level,
+                        "native_language": native}
+        if intake is not None:
+            # A later "remember me" only has name and goal left to ask.
+            intake.answers.update(holder.guest)
+        language, own = language_name(target), language_name(native)
+        beginner = level == "beginner" and native != target
+        rules = " ".join([
+            _LESSON_LANGUAGE_RULE["beginner" if beginner else "other"].format(
+                name="the visitor", language=language, native=own),
+            _LEVEL_GUIDANCE[level].format(language=language, native=own),
+            script_rule_text(target, language),
+            _CORRECTIONS_RULE["blocking"].format(language=language,
+                                                 name="the visitor"),
+        ])
+        logger.info("tutor: quick lesson: %s, %s, taught in %s (a guest, "
+                    "nothing stored)", target, level, native)
+        note = ("start now, in this same turn: one short line on what you "
+                "will do, then, unless they already said, ask in one short "
+                "question whether they want useful words, a little "
+                "conversation or a quick quiz, and begin that. Ask nothing "
+                "else about them.")
+        if target == native:
+            # 2026-09-25, the Faire's first day: "a couple of times it
+            # was tricked into teaching English in English".
+            logger.info("tutor: quick lesson in the visitor's own "
+                        "language (%s); asking first", target)
+            note = (f"they asked to practise {language}, the language they "
+                    f"are speaking to you in. Before teaching, ask "
+                    f"playfully whether {language} is their own language. "
+                    "If it is, suggest another one (Spanish, French, "
+                    "Japanese, Mandarin, or any they like) and call "
+                    "start_lesson again with it. If it is not, call "
+                    "start_lesson again with native_language set to their "
+                    "own language, and teach.")
+        await params.result_callback(
+            {"lesson": language, "level": level, "taught_in": own,
+             "rules": rules, "note": note})
 
     async def intake_answer(params):
         """T17.4: one interview answer at a time."""
@@ -1351,10 +1608,15 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
             await params.result_callback(
                 {"confirmed": False,
                  "reason": f"the face in front of you is not {learner.name}'s. "
-                           "Apologize lightly, ask their name, and treat "
-                           "them as someone new: offer a lesson and, on a "
-                           "clear yes to being remembered, run the "
-                           "enrollment interview."})
+                           + ("Apologize lightly and treat them as someone "
+                              "new: ask which language they want to "
+                              "practise and their level, then call "
+                              "start_lesson."
+                              if intake is not None and intake.quick else
+                              "Apologize lightly, ask their name, and treat "
+                              "them as someone new: offer a lesson and, on a "
+                              "clear yes to being remembered, run the "
+                              "enrollment interview.")})
             return
         holder.learner = learner
         holder.candidate = None
@@ -1394,6 +1656,27 @@ def build_enrollment_tools(store: LearnerStore, holder: CurrentLearner,
             rebrief("identity confirmed")
 
     tools = [
+        FunctionSchema(
+            name="start_lesson",
+            description="Start a lesson for a visitor you do not know, as "
+                        "soon as they have said which language they want "
+                        "to practise and their level. Nothing is stored. "
+                        "Call again if they switch language or level. Not "
+                        "for an enrolled student (use set_target_language).",
+            properties={
+                "language": {"type": "string",
+                             "description": "language to practise, e.g. "
+                                            "'Arabic' or 'ar'"},
+                "level": {"type": "string", "enum": list(LEVELS),
+                          "description": "beginner if unsure"},
+                "native_language": {
+                    "type": "string",
+                    "description": "the language they are speaking to you "
+                                   "in, e.g. 'English' or 'ru'"},
+            },
+            required=["language", "level"],
+            handler=start_lesson,
+        ),
         FunctionSchema(
             name="intake_answer",
             description="Record one answer of the enrollment interview, "

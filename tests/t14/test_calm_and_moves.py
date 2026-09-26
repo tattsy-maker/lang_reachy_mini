@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "voice"))
 
-from moves import LIBRARY, MAX_PERFORM_SECS  # noqa: E402
+from moves import LIBRARY, MAX_PERFORM_SECS, PASS_OVERHEAD_SECS  # noqa: E402
 from tracking import FaceTracker  # noqa: E402
 from tutor_mode import BOOTH_PERSONA  # noqa: E402
 
@@ -74,10 +74,13 @@ def test_dances_default_to_about_thirty_seconds():
         spec = LIBRARY[name]
         assert spec.default_secs >= 25
         passes = spec.passes_for(None)
-        assert 20 <= passes * spec.seconds <= 40, (name, passes)
+        # 2026-09-25: real clip lengths, plus each pass's ~1.7 s overhead
+        per_pass = spec.seconds + PASS_OVERHEAD_SECS
+        assert 20 <= passes * per_pass <= 40, (name, passes)
     assert LIBRARY["cheer"].passes_for(None) == 1, "emotions play once"
-    assert LIBRARY["dance"].passes_for(60) * 9 <= MAX_PERFORM_SECS + 9
-    assert LIBRARY["dance"].passes_for(500) * 9 <= MAX_PERFORM_SECS + 9, "capped"
+    per_pass = LIBRARY["dance"].seconds + PASS_OVERHEAD_SECS
+    assert LIBRARY["dance"].passes_for(60) * per_pass <= MAX_PERFORM_SECS + per_pass
+    assert LIBRARY["dance"].passes_for(500) * per_pass <= MAX_PERFORM_SECS + per_pass, "capped"
     assert LIBRARY["dance"].passes_for(5) == 1
 
 

@@ -110,6 +110,30 @@ WALKAWAY_CUE = ("(The visitor seems to have left. Say one short goodbye "
                 "same turn, if you were tutoring someone this session, call "
                 "save_session_notes with your honest summary.)")
 
+# 2026-09-25 (the Faire's first day): after someone left mid-lesson the
+# next visitor heard "we were just talking about Spanish, let's keep
+# talking about Spanish" and "didn't get to decide what they wanted".
+# A guest lesson still carries on through a new face (no reset, no head
+# drop), but the newcomer is asked.
+GUEST_SWAP_CUE = ("(Stage direction, not the visitor speaking: a different "
+                  "face is in front of you now, probably someone new. Do "
+                  "not carry on as if nothing happened. In one or two short "
+                  "sentences, say hi and ask whether they would like to go "
+                  "on with {language} or try another language, and whether "
+                  "they are a beginner. Do not introduce yourself at length.)")
+GUEST_SWAP_CUE_GAP_SECS = 45.0
+
+CALL_OUT_CUE = ("(Stage direction, not a visitor speaking: nobody is talking "
+                "to you right now, but someone is looking at you from a few "
+                "steps away. Call out to them in English, in one or two "
+                "short, friendly sentences: invite them to come closer and "
+                "learn a word in any language they like. Word it "
+                "differently each time. Do not go back to any earlier "
+                "conversation and do not call any tools.)")
+# Faces this wide (of the frame) and up to the visitor gate count as
+# onlookers: about 1.3 to 3 m away.
+ONLOOKER_MIN_WIDTH = 0.025
+
 STILL_THERE_CUE = ("(You have not seen or heard the visitor for a while. "
                    "Ask, in one short sentence in the lesson language, "
                    "whether they are still there. Nothing else.)")
@@ -121,20 +145,32 @@ BOOTH_NOTE = """
 You are at a busy booth. People walk up, swap seats and leave without \
 warning, often mid-sentence, so the person in front of you can change at \
 any moment. If a voice or an answer does not fit the student you were \
-talking to, do not assume: call look, or ask their name."""
+talking to, do not assume: ask. Groups often talk at once: if you hear two \
+voices or two different answers, say cheerfully that you can listen to one \
+person at a time, pick one of them to go first, and give the others a turn \
+after."""
 
 
 class SessionMachine:
     """Watch/active state with stability, still-there and walk-away timers."""
 
     def __init__(self, stable_secs: float = 2.0, absent_secs: float = 60.0,
-                 ask_fraction: float = 2.0 / 3.0):
+                 ask_fraction: float = 2.0 / 3.0,
+                 voice_hold_secs: float | None = None):
         self.stable_secs = stable_secs
         self.absent_secs = absent_secs
         self.ask_fraction = ask_fraction
+        # 2026-09-25, the Faire: hall chatter reached the mic as "the
+        # visitor speaking", kept an empty session alive and had it ask
+        # "¿Sigues ahí?" three times in 70 s. Voice now keeps a session
+        # alive only this long after the last face, and only a face
+        # re-arms the still-there question (None = the T13.2 behaviour:
+        # voice holds forever and re-arms it).
+        self.voice_hold_secs = voice_hold_secs
         self.state = WATCHING
         self._first_seen: float | None = None
         self._last_seen: float | None = None
+        self._last_face: float | None = None
         self._asked = False
 
     def on_face(self, present: bool, now: float) -> str | None:
@@ -156,7 +192,7 @@ class SessionMachine:
             return None
         # ACTIVE
         if present:
-            self._last_seen = now
+            self._last_seen = self._last_face = now
             self._asked = False
             return None
         if self._last_seen is None:
@@ -171,9 +207,18 @@ class SessionMachine:
     def on_voice(self, now: float) -> None:
         """The visitor spoke: that is presence too (T13.2). Voice never
         *starts* a session -- a face must -- but it keeps one alive."""
-        if self.state == ACTIVE:
+        if self.state != ACTIVE:
+            return
+        if self.voice_hold_secs is None:
+            # At home (T13.2): an answer from the kitchen is presence and
+            # re-arms the question.
             self._last_seen = now
             self._asked = False
+            return
+        if self._last_face is not None \
+                and now - self._last_face > self.voice_hold_secs:
+            return
+        self._last_seen = now
 
     def seconds_absent(self, now: float) -> float:
         if self.state != ACTIVE or self._last_seen is None:
@@ -182,7 +227,7 @@ class SessionMachine:
 
     def session_started(self, now: float) -> None:
         self.state = ACTIVE
-        self._last_seen = now
+        self._last_seen = self._last_face = now
         self._first_seen = None
         self._asked = False
 
@@ -193,7 +238,63 @@ class SessionMachine:
         self.state = WATCHING
         self._first_seen = None
         self._last_seen = None
+        self._last_face = None
         self._asked = False
+
+
+class Caller:
+    """Call out to an onlooker (2026-09-25, the Faire's first day: the
+    dancing drew people, but "he has to just keep saying something,
+    because then it actually gets people's attention, and sometimes they
+    come but nothing happens"). An onlooker is a real face too far away
+    to be a visitor (under recognize.VISITOR_MIN_WIDTH): someone looking
+    over from a few steps off, who the robot used to ignore.
+
+    Fires when an onlooker has been seen for ``hold_secs`` after at least
+    ``fresh_secs`` with none (a face that stays put -- a poster, a bag on
+    a shelf -- is called to once, not every minute), and at most every
+    ``every_secs``. ``every_secs`` of zero disables it."""
+
+    def __init__(self, every_secs: float = 0.0, fresh_secs: float = 10.0,
+                 hold_secs: float = 1.0, flicker_secs: float = 1.5):
+        self.every_secs = every_secs
+        self.fresh_secs = fresh_secs
+        self.hold_secs = hold_secs
+        self.flicker_secs = flicker_secs
+        self._seen_at = -math.inf       # last frame with an onlooker
+        self._run_start: float | None = None
+        self._fresh = False
+        self._last_call = -math.inf
+
+    @property
+    def enabled(self) -> bool:
+        return self.every_secs > 0
+
+    def on_frame(self, onlooker: bool, now: float,
+                 allowed: bool = True) -> bool:
+        """``allowed``: nobody is being talked to. Onlookers are tracked
+        either way, so a bystander who watched a lesson from two metres
+        is not "fresh" the moment it ends."""
+        if not self.enabled:
+            return False
+        if not onlooker:
+            if now - self._seen_at > self.flicker_secs:
+                self._run_start = None
+            return False
+        if self._run_start is None:
+            self._run_start = now
+            self._fresh = now - self._seen_at >= self.fresh_secs
+        self._seen_at = now
+        if not allowed:
+            # seen while the robot was busy: not someone new to call to
+            self._fresh = False
+        if (allowed and self._fresh
+                and now - self._run_start >= self.hold_secs
+                and now - self._last_call >= self.every_secs):
+            self._last_call = now
+            self._fresh = False
+            return True
+        return False
 
 
 class Attractor:
@@ -231,6 +332,57 @@ class Attractor:
         return True
 
 
+class Glancer:
+    """Idle look-around (2026-09-25: "it does not dance or move when a
+    person is not present"). With nobody in frame, a small random glance
+    -- head turned, tilted, sometimes the antennas -- every
+    ``every_secs`` (jittered), starting a few seconds after the frame
+    empties, so the robot looks alive between attract moves. Any face
+    stops it. ``every_secs`` of zero disables it. Head only: the base
+    stays put (a twitching base is what T15.11 removed)."""
+
+    MAX_YAW_DEG, MAX_PITCH_DEG, MAX_ROLL_DEG = 35.0, 10.0, 8.0
+
+    def __init__(self, every_secs: float = 0.0, first_after: float = 3.0,
+                 rng=None):
+        import random
+        self.every_secs = every_secs
+        self.first_after = first_after
+        self.rng = rng or random.Random()
+        self._next: float | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.every_secs > 0
+
+    def on_face(self, present: bool, now: float) -> dict | None:
+        """The glance to make now (posture dofs + duration), or None."""
+        if not self.enabled or present:
+            self._next = None
+            return None
+        if self._next is None:
+            self._next = now + min(self.first_after, self.every_secs)
+            return None
+        if now < self._next:
+            return None
+        self._next = now + self.every_secs * self.rng.uniform(0.7, 1.3)
+        return self.pose()
+
+    def pose(self) -> dict:
+        r = self.rng
+        cmd = {"head_yaw": math.radians(r.uniform(-self.MAX_YAW_DEG,
+                                                  self.MAX_YAW_DEG)),
+               "head_pitch": math.radians(r.uniform(-self.MAX_PITCH_DEG,
+                                                    self.MAX_PITCH_DEG)),
+               "head_roll": math.radians(r.uniform(-self.MAX_ROLL_DEG,
+                                                   self.MAX_ROLL_DEG))}
+        if r.random() < 0.5:
+            cmd["antenna_left"] = r.uniform(-0.6, 0.6)
+            cmd["antenna_right"] = r.uniform(-0.6, 0.6)
+        cmd["duration"] = r.uniform(1.0, 1.8)
+        return cmd
+
+
 class SessionRunner:
     """Drives the machine from real frames and rewires the live agent."""
 
@@ -244,7 +396,10 @@ class SessionRunner:
                  face_recheck_secs: float = 2.0, swap_secs: float = 3.0,
                  face_vouch_secs: float = 5.0, speaking=None,
                  booth_note: bool = True, budget=None,
-                 snapshot_dir: str | None = None):
+                 snapshot_dir: str | None = None,
+                 onboarding: str = "full", glance_every: float = 0.0,
+                 voice_hold_secs: float | None = None,
+                 call_out_every: float = 0.0):
         self.source = source
         # 2026-09-23: every session start leaves a photo of who was
         # greeted (the box drawn in), next to the look frames.
@@ -258,10 +413,20 @@ class SessionRunner:
         self.task = task
         self.base_prompt = base_prompt + (BOOTH_NOTE if booth_note else "")
         self.languages = languages
+        # 2026-09-25: "quick" = one question, then a lesson (tutor_mode).
+        self.onboarding = onboarding
         self.robot = robot
         self.stt = stt  # optional: bilingual priming per learner (T7)
-        self.machine = SessionMachine(stable_secs, absent_secs)
+        self.machine = SessionMachine(stable_secs, absent_secs,
+                                      voice_hold_secs=voice_hold_secs)
         self.attractor = Attractor(attract_secs, attract_every)
+        # 2026-09-25: the last attract move (no repeats) and when it ends
+        # (a visitor who walks up mid-dance stops it).
+        self._attract_last: str | None = None
+        self._attract_until = -math.inf
+        self.glancer = Glancer(glance_every)
+        self.caller = Caller(call_out_every)     # 2026-09-25
+        self._glancing_logged = False
         self.hub = hub            # shared camera (T13.3); else own Camera
         self.tracker = tracker    # FaceTracker fed from this loop, if any
         self.voice_identity = voice_identity   # T13.9, reset per visitor
@@ -307,6 +472,8 @@ class SessionRunner:
         self._session_bbox = None
         # T17.8: the sightseeing budget, reset per visitor.
         self.budget = budget
+        self._newcomer_asked_at = -math.inf
+        self._cue_task = None
 
     # -- presence inputs from the pipeline ----------------------------------
 
@@ -342,19 +509,34 @@ class SessionRunner:
             self.tracker.reset()
         if self.robot is not None:
             try:
-                self.robot.home(duration=1.0)
+                # 2 s, not 1: a 1 s drop from a dance or a lesson pose,
+                # five times in three minutes, scared a girl (2026-09-25).
+                self.robot.home(duration=2.0)
             except Exception as exc:                            # noqa: BLE001
                 logger.warning("session: robot home failed: %s", exc)
 
-    async def _perform(self, name: str, seconds: float) -> None:
+    async def _perform(self, name: str, seconds: float,
+                       repeat: int = 1) -> None:
         """The idle attractor's move (overridable in tests)."""
         if self.tracker is not None:
             self.tracker.suspend(seconds)
         if self.robot is not None:
             try:
-                self.robot.perform(name)
+                self.robot.perform(name, repeat=repeat)
             except Exception as exc:                            # noqa: BLE001
                 logger.warning("session: attractor move failed: %s", exc)
+
+    async def _glance(self, cmd: dict) -> None:
+        """One idle glance (overridable in tests)."""
+        cmd = dict(cmd)
+        duration = cmd.pop("duration", 1.2)
+        if self.tracker is not None:
+            self.tracker.suspend(duration + 0.3)
+        if self.robot is not None:
+            try:
+                self.robot.posture(duration=duration, **cmd)
+            except Exception as exc:                            # noqa: BLE001
+                logger.warning("session: idle glance failed: %s", exc)
 
     def _log_presence(self, state: str) -> None:
         if state != self._presence:
@@ -393,18 +575,19 @@ class SessionRunner:
         recognition pass) → the right system-prompt addendum."""
         from face import recognize
         from tutor_mode import (
-            BRIEFING_SESSIONS, STRANGER_BRIEFING, build_briefing,
-            build_unsure_briefing,
+            BRIEFING_SESSIONS, build_briefing, build_unsure_briefing,
+            stranger_briefing,
         )
         known = {l.id: l.embedding for l in self.store.list()
                  if l.embedding and len(l.embedding) == len(face_vector)}
         found = recognize.match(face_vector, known)
         if found is None:
-            logger.info("session: face unknown -> stranger flow")
-            return STRANGER_BRIEFING.format(languages=self.languages)
+            logger.info("session: face unknown -> stranger flow (%s)",
+                        self.onboarding)
+            return stranger_briefing(self.onboarding, self.languages)
         learner = self.store.load(found.name)
         if learner is None:
-            return STRANGER_BRIEFING.format(languages=self.languages)
+            return stranger_briefing(self.onboarding, self.languages)
         if found.sure:
             logger.info("session: recognized %s (score %.3f)",
                         learner.id, found.score)
@@ -416,7 +599,8 @@ class SessionRunner:
         logger.info("session: unsure about %s (score %.3f) -> will ask",
                     learner.id, found.score)
         self.holder.candidate = learner
-        return build_unsure_briefing(learner)
+        return build_unsure_briefing(learner,
+                                     quick=self.onboarding == "quick")
 
     def _prime_stt(self, learner) -> None:
         if self.stt is None:
@@ -432,6 +616,14 @@ class SessionRunner:
 
     async def start_session(self, now: float) -> None:
         from face import recognize
+        if now < self._attract_until:
+            # Someone walked up mid-dance: look at them, not the dance.
+            logger.info("attractor: a visitor arrived mid-%s; stopping it",
+                        self._attract_last)
+            self._attract_until = -math.inf
+            if self.tracker is not None:
+                self.tracker.resume()
+            await self._robot_neutral()
         face = recognize.enroll_from_vectors(self._recent_vectors)
         await self._wait_quiet(4.0)
         self.holder.reset()
@@ -449,6 +641,7 @@ class SessionRunner:
         self._last_recheck = now
         self._force_recheck = False
         self._face_absent_since = None
+        self._newcomer_asked_at = -math.inf
         briefing = self._briefing_for(face)
         await self._set_system_prompt(self.base_prompt + briefing)
         self.machine.session_started(now)
@@ -711,6 +904,36 @@ class SessionRunner:
         self._log_check(verdict, score, now)
         return verdict
 
+    async def _ask_newcomer(self, now: float) -> None:
+        """A new face took over a guest lesson: once a language is under
+        way, ask them whether to go on with it (at most every
+        GUEST_SWAP_CUE_GAP_SECS, so a group swapping places is not asked
+        at every swap)."""
+        guest = getattr(self.holder, "guest", None)
+        if not guest or now - self._newcomer_asked_at < GUEST_SWAP_CUE_GAP_SECS:
+            return
+        from tutor_mode import language_name
+        self._newcomer_asked_at = now
+        language = language_name(guest.get("target_language", "en"))
+        logger.info("session: asking the newcomer whether to go on with %s",
+                    language)
+        # In the background: the frame loop (and the tracker) must not
+        # wait for the robot to finish its sentence.
+        self._cue_task = asyncio.create_task(self._cue_when_quiet(
+            GUEST_SWAP_CUE.format(language=language)))
+
+    async def _cue_when_quiet(self, text: str, max_wait: float = 6.0) -> None:
+        try:
+            await self._wait_quiet(max_wait)
+            await self._queue_user_turn(text)
+        except Exception as exc:                            # noqa: BLE001
+            logger.warning("session: cue failed: %s", exc)
+
+    def _guest_session(self) -> bool:
+        """A quick-start visit with nobody enrolled or being confirmed."""
+        return (self.onboarding == "quick" and self.holder.learner is None
+                and self.holder.candidate is None)
+
     def _log_check(self, verdict: str, score: float, now: float) -> None:
         c = self._check_log
         c["n"] += 1
@@ -765,6 +988,9 @@ class SessionRunner:
                     # are not visitors: no greeting, no presence, no gaze.
                     kept = recognize.visitors(faces, frame.shape[1])
                     self._log_ignored(faces, kept, frame.shape[1], now)
+                    await self.onlookers(
+                        [f for f in faces if not any(f is k for k in kept)],
+                        frame.shape[1], visitor=bool(kept), now=now)
                     faces = kept
                     face = faces[0] if faces else None
                     self._last_frame, self._snapshot_faces = frame, faces
@@ -774,6 +1000,25 @@ class SessionRunner:
         finally:
             if self.hub is None:
                 source.close()
+
+    async def onlookers(self, ignored: list, width: float, visitor: bool,
+                        now: float) -> None:
+        """Faces the visitor gate turned away: call out to one that looks
+        like a person a few steps off (Caller), while nobody is being
+        talked to."""
+        from face import recognize
+        near = [f for f in ignored
+                if f.score >= recognize.VISITOR_MIN_SCORE
+                and (f.bbox[2] - f.bbox[0]) >= ONLOOKER_MIN_WIDTH * width]
+        idle = (self.machine.state == WATCHING and not visitor
+                and not (self.speaking is not None and self.speaking()))
+        if not self.caller.on_frame(bool(near), now, allowed=idle):
+            return
+        f = near[0]
+        logger.info("attractor: someone looking from a few steps away "
+                    "(score %.2f, width %.1f%%); calling out", f.score,
+                    100.0 * (f.bbox[2] - f.bbox[0]) / width)
+        await self._queue_user_turn(CALL_OUT_CUE)
 
     def _log_ignored(self, faces, kept, width, now: float) -> None:
         """At most every 30 s: the faces the visitor gate turned away, so
@@ -805,7 +1050,7 @@ class SessionRunner:
         Everything the frame loop decides happens here, so tests can
         drive it without a camera."""
         import random
-        from moves import ATTRACT_MOVES, LIBRARY
+        from moves import ATTRACT_MOVES, attract_passes
 
         if faces and self.machine.state == ACTIVE:
             face = self._pick_face(faces, now)
@@ -832,6 +1077,22 @@ class SessionRunner:
                     if verdict == "same":
                         self._session_bbox = face.bbox
                     if verdict == "other" and self._other_since is not None \
+                            and now - self._other_since >= self.swap_secs \
+                            and self._guest_session():
+                        # Quick start: nothing is stored, so there is no one
+                        # to protect -- whoever is in front now carries on
+                        # the lesson. Ending here was a reset, a head drop
+                        # and a fresh "Hello, I am Reachy" five times in
+                        # three minutes with one group of kids (2026-09-25).
+                        logger.info("session: someone new in front of the "
+                                    "robot; a guest lesson, so carrying on "
+                                    "with them")
+                        self._session_face = face.embedding
+                        self._session_vectors = [face.embedding]
+                        self._other_since = None
+                        self._same_face_at = now
+                        await self._ask_newcomer(now)
+                    elif verdict == "other" and self._other_since is not None \
                             and now - self._other_since >= self.swap_secs:
                         who = (self.holder.learner.id if self.holder.learner
                                else "the visitor")
@@ -877,6 +1138,9 @@ class SessionRunner:
                 self.tracker.relax(now)
 
         advice = self.machine.on_face(present, now)
+        glance = self.glancer.on_face(
+            present or self.machine.state != WATCHING
+            or now < self._attract_until, now)
         if advice == "start":
             await self.start_session(now)
         elif advice == "ask":
@@ -884,11 +1148,28 @@ class SessionRunner:
         elif advice == "end":
             await self.end_session()
         elif self.machine.state == WATCHING \
+                and (present or now >= self._attract_until) \
                 and self.attractor.on_face(present, now):
-            name = random.choice(ATTRACT_MOVES)
-            logger.info("attractor: nobody for %.0fs, playing %s",
-                        self.attractor.after_secs, name)
-            await self._perform(name, LIBRARY[name].seconds)
+            # (never on top of the move still playing: with a short
+            # --attract-every the next one starts as this one ends)
+            name = random.choice([m for m in ATTRACT_MOVES
+                                  if m != self._attract_last]
+                                 or list(ATTRACT_MOVES))
+            passes, seconds = attract_passes(name)
+            self._attract_last = name
+            self._attract_until = now + seconds + 1.0
+            logger.info("attractor: nobody for %.0fs, playing %s x%d "
+                        "(%.0fs)", self.attractor.after_secs, name, passes,
+                        seconds)
+            await self._perform(name, seconds + 1.0, repeat=passes)
+        elif glance is not None and self.machine.state == WATCHING:
+            if not self._glancing_logged:
+                logger.info("attractor: nobody in frame, looking around "
+                            "every ~%.0fs", self.glancer.every_secs)
+                self._glancing_logged = True
+            await self._glance(glance)
+        if present:
+            self._glancing_logged = False
 
 
 # 2026-09-23: the lesson's first turn after a mid-session rebrief.

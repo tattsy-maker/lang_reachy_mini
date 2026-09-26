@@ -1236,3 +1236,132 @@ closing answer in `booth/feedback.md`.
   the baseline (0–20 % of mistakes corrected). `tests/t14 -k two_visits`
   still fails on its pre-T16 reconnect race. Open: the next family
   session through the protocol in progress/T17.md.
+
+## T18 — Louder, every language, quick start, livelier idle (2026-09-25)
+
+What was asked on 2026-09-25: the volume "as much as possible"; every
+language Gemini speaks ("for example Arabic" -- a visitor had heard "I
+do not speak Arabic yet"); onboarding simplified so a newcomer speaks
+right away, profiles only for someone who asks to be remembered; more
+dance moves while nobody is in view.
+
+- **T18.1 Loudness.** The mixer was already 60/60 (0 dB) and Gemini's
+  audio peaks at 0 dBFS, so the headroom is in the waveform: a tanh
+  soft clip (`voice/loudness.py`, `--loudness-db`, booth default 12 =
+  about +8 dB in the speaker band on Gemini 3.1's audio, +6 on 2.5's;
+  a limiter alone topped out at +3).
+  `BOOTH_VOLUME` default 90 -> 100.
+- **T18.2 Every language.** `_LANGUAGE_NAMES` is Gemini Live's list of
+  99 (96 codes), with aliases (Farsi, Tagalog, zh-Hans, ar-EG ...) and
+  script hints for the non-Latin ones; cloud mode's prompt names them
+  all instead of eight and "most other languages".
+- **T18.3 Quick start** (`--onboarding quick`, default; `full` is the
+  T17.4 interview). "Hi, I'm Reachy ... which language, beginner or
+  some?" -> `start_lesson(language, level, native_language)` -> the
+  lesson, nothing stored. "Remember me" -> `intake_answer` name + goal
+  -> `enroll_new_learner` (corrections default `blocking`, no agreed
+  length), and the lesson carries on without a fresh Gemini session.
+- **T18.4 Attractor.** 30 s, then every 60 s (`--attract-every`; 5 s /
+  12 s since T18.5); 15
+  moves (12 new, `attract_only`, not in the model's `perform` list),
+  short loops repeated to ~8 s, never the same twice; a visitor who
+  walks up mid-move stops it.
+
+**Progress log.**
+- 2026-09-25 — built. `tests/t18` 40 passed (voice venv); the whole
+  unmarked suite green apart from the camera and sound-card tests the
+  running booth service holds. Live (cloud, fixture face, HDMI out):
+  quick stranger flow -> `start_lesson` ar/beginner/en -> "Repeat after
+  me: marhaba"; "remember me" -> only "What is your name?". Open: how
+  the soft clip sounds on the robot's speaker (lower
+  `BOOTH_LOUDNESS_DB` if harsh), and a real visitor through the quick
+  start.
+- 2026-09-25 (noon, at the Faire) — louder confirmed. "It does not
+  dance or move when a person is not present ... it should mostly keep
+  dancing when idle": the log showed ~90 s of stillness after every
+  visitor (60 s walk-away + 30 s wait) and a minute between dances.
+  **T18.5:** idle glances (`Glancer`, `--idle-glance-secs`, booth 4),
+  dances back to back (booth 5 s / 12 s, never on top of the running
+  move, pass overhead counted), `BOOTH_ABSENT_SECS` 60 -> 20. Simulated:
+  85 % of idle time moving; live: stumble, robot, dance_wiggly in the
+  first 30 s after the restart.
+- 2026-09-25 (afternoon) — "it went up and down abruptly a couple of
+  times and scared a girl ... can we enable fluent conversations with
+  break-in". The log: five face-swap resets in three minutes with one
+  group of kids (head `home` in 1 s each time, then a new greeting),
+  sharp idle clips, "¿Sigues ahí?" three times from hall chatter.
+  **T18.6:** guest lessons carry on through a new face; smooth idle
+  moves only, measured clip lengths (several were 2-4x off) and per-pass
+  overhead in `perform`; `home` over 2 s; `--voice-hold-secs 45`;
+  transcripts count as presence; `--barge-in` (echo-gated mute,
+  voice/barge_in.py). Live: carry-on seen at the booth; barge-in never
+  fired with the mic's AGC on (echo -4/-8 dBFS); AGC off at 13:47, echo
+  to be read from the next `barge-in:` line.
+
+## T19 — The Faire's first day, reflected (2026-09-25, evening)
+
+What was asked: the family's day-one debrief (quiet in the busy hours;
+groups of kids on both mics; replies a few seconds late after a word
+said back, and the first half second of an answer not heard; ask the
+level and what kind of practice; English taught in English; "saying
+what it was seeing while we did not ask", from a stale frame; the
+newcomer after an abrupt exit told "let's keep talking about Spanish";
+bursty moves, "antennas like saw blades", scared a girl; people drawn
+by the dancing but "sometimes they come but nothing happens"; a boring
+answer to zero divided by zero; "what LLM is it?"), plus: the wake-up
+rises and then snaps the head right-down; the greeting came out as
+"hello, you are Reachy".
+
+- **T19.1 Wake-up.** The snap was the vendor daemon's own wake-up (rise,
+  then a 20-degree roll in 0.2 s and back). The daemon now starts with
+  `--no-wake-up-on-start`; `wake_gently` in the agent rises over 3.5 s
+  (was a 1 s home) and stretches the antennas once, and the session loop
+  waits for it.
+- **T19.2 Greeting.** The quick-start prompt literally said "hello, you
+  are Reachy". Now: "Hi! I am Reachy, a friendly language tutor.", one
+  sentence of what they can do (words, chat, a quiz), then which language
+  and what level.
+- **T19.3 The lesson's shape.** The level is always asked before
+  teaching; then "useful words, a little conversation, or a quick quiz?";
+  English asked in English gets "is English your own language?" (the
+  prompt, and start_lesson's result when target == native). Gemini hears
+  the voice, so it gives one concrete sound or tone tip (Mandarin tones
+  named). Praise comes with a nod, a wiggle or a cheer.
+- **T19.4 Look only when asked.** The log had look called on "Hello",
+  "Close the door", "New person": the prompt invited it ("or you want to
+  check who is in front of you", BOOTH_NOTE's "call look"). Now only when
+  the visitor asks; every question gets a fresh frame; an old picture is
+  never mentioned again.
+- **T19.5 Groups.** BOOTH_NOTE: two voices or two answers -> "one person
+  at a time", pick one, the others after. (Physically: one mic out.)
+- **T19.6 The newcomer is asked.** A new face in a guest lesson still
+  carries on (T18.6, no reset), but once a language is under way the
+  model is cued to ask whether to go on with it or try another (at most
+  every 45 s).
+- **T19.7 Calm moves.** `moves.py --measure` reads each clip's peak head
+  and antenna speeds; `MoveSpec.speed` slows the fast ones inside `CALM`
+  (120 mm/s, 110 deg/s, 250 deg/s antennas; polyrhythm's antennas were
+  505 deg/s, sway's head 235 mm/s). `reachy_target._Slowed` time-stretches
+  the clip. The antenna wiggle is 0.5 s each way (was 0.25 s, 1.3 rad).
+- **T19.8 A quick answer is a turn.** `prefix_padding_ms` is the speech
+  needed before Gemini commits to a start, not a pre-roll (the old
+  comment was wrong): 300 -> 100 (`--turn-onset-ms`,
+  `BOOTH_TURN_ONSET_MS`). Booth turn patience 1800 -> 1200 ms
+  (`BOOTH_TURN_PATIENCE_MS`): the day's `turn: first sound` was median
+  3.1 s, p90 5.8 s over 464 replies.
+- **T19.9 Call-out.** A face 1.3-3 m away (under the visitor gate) that
+  appears while nobody is being served gets a spoken invitation from
+  Gemini, at most every 40 s (`--call-out-secs`, `BOOTH_CALL_OUT_SECS`);
+  a face that stays put is called to once.
+- **T19.10 Persona.** Silly questions get a funny answer, jokes on
+  request; "how do you work" has true answers (Gemini Live in the cloud;
+  faces, voices and motion local).
+
+**Progress log.**
+- 2026-09-25 (evening) — built. `tests/t19` 15 passed; t4, t9, t10,
+  t13-t18 offline suites 220 passed (voice venv). A live Gemini probe
+  (T17's, run by accident with the new 100 ms onset and 1800 ms
+  patience) still took one turn across a 1.2 s pause. Not yet seen on
+  the metal: the wake-up without the vendor's (the daemon flag), the
+  slowed clips, a call-out. Open: whether 1200 ms patience cuts off
+  someone thinking mid-sentence (read `heard:` lines).

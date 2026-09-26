@@ -43,6 +43,15 @@ INTAKE_FIELDS = ("name", "target_language", "native_language", "explain_in",
 # what T16 always did. Every other field is required.
 OPTIONAL_FIELDS = ("explain_in",)
 DEFAULTS = {"explain_in": "native"}
+
+# Quick start (2026-09-25): a newcomer is practising within seconds and
+# nobody is interviewed. ``start_lesson`` fills the first three from the
+# visitor's one answer ("Spanish, beginner", said in their own language);
+# only a visitor who asks to be remembered is asked the last two. Every
+# other field takes its default: explanations in their own language,
+# corrections of what blocks understanding, no agreed length.
+QUICK_FIELDS = ("target_language", "level", "native_language", "name", "goal")
+QUICK_DEFAULTS = {"explain_in": "native", "corrections": "blocking"}
 MIN_MINUTES, MAX_MINUTES = 1, 180
 
 # What to ask for each field, for the model (it phrases it in the
@@ -115,7 +124,11 @@ def parse_minutes(value) -> int | None:
 class Intake:
     """The interview's answers, validated one field at a time."""
 
-    def __init__(self):
+    def __init__(self, quick: bool = False):
+        self.quick = quick
+        self.fields = QUICK_FIELDS if quick else INTAKE_FIELDS
+        self.optional = () if quick else OPTIONAL_FIELDS
+        self.defaults = QUICK_DEFAULTS if quick else DEFAULTS
         self.answers: dict = {}
         self.goal_note = ""
 
@@ -199,10 +212,10 @@ class Intake:
     # -- state ---------------------------------------------------------------
 
     def missing(self) -> list[str]:
-        return [f for f in INTAKE_FIELDS if f not in self.answers]
+        return [f for f in self.fields if f not in self.answers]
 
     def missing_required(self) -> list[str]:
-        return [f for f in self.missing() if f not in OPTIONAL_FIELDS]
+        return [f for f in self.missing() if f not in self.optional]
 
     @property
     def complete(self) -> bool:
@@ -230,7 +243,8 @@ class Intake:
                            "missing question, record it now with another "
                            "intake_answer call; otherwise ask the next "
                            "question, one question, in the visitor's "
-                           "language. No lesson yet.")
+                           "language. " + ("Then back to the lesson."
+                                           if self.quick else "No lesson yet."))
         elif missing:
             out["next"] = self.next_question()
             out["note"] = ("only explain_in is unanswered: ask it if they "
@@ -246,12 +260,18 @@ class Intake:
         return dict(level=a["level"], goal=a["goal"],
                     goal_note=self.goal_note,
                     native_language=a["native_language"],
-                    explain_in=a.get("explain_in", DEFAULTS["explain_in"]),
-                    corrections=a["corrections"])
+                    explain_in=a.get("explain_in", self.defaults["explain_in"]),
+                    corrections=a.get("corrections",
+                                      self.defaults.get("corrections")))
 
-    def plan(self, now: float) -> "SessionPlan":
+    def plan(self, now: float) -> "SessionPlan | None":
+        """This session's plan, or None when no length was agreed (the
+        quick start never asks)."""
+        if "minutes" not in self.answers:
+            return None
         return SessionPlan(minutes=self.answers["minutes"],
-                           focus=self.answers["today"], started_at=now)
+                           focus=self.answers.get("today", "a short lesson"),
+                           started_at=now)
 
     def reset(self) -> None:
         self.answers.clear()

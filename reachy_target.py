@@ -485,6 +485,8 @@ class ReachyMiniTarget:
                                  if m.dataset)))
         mini = self._require()
         move = self._recorded_move(spec.dataset, spec.move)
+        if spec.speed != 1.0:
+            move = _Slowed(move, spec.speed)
         with self._lock:
             body_before = self._cmd["body_yaw"]
         try:
@@ -566,6 +568,29 @@ class ReachyMiniTarget:
                 "limits": {k: list(v) for k, v in LIMITS.items()},
                 "last_error": self._last_error,
             }
+
+
+class _Slowed:
+    """A recorded move played at ``speed`` (below 1 = slower), in the
+    shape the vendor's ``play_move`` reads: ``duration``, ``evaluate(t)``
+    and ``sound_path``. moves.MoveSpec.speed says how slow (2026-09-25:
+    the fast clips scared a child at the Faire)."""
+
+    def __init__(self, move, speed: float):
+        self._move = move
+        self._speed = float(speed)
+
+    @property
+    def duration(self) -> float:
+        return self._move.duration / self._speed
+
+    @property
+    def sound_path(self):
+        return None
+
+    def evaluate(self, t: float):
+        return self._move.evaluate(min(t * self._speed,
+                                       self._move.duration - 1e-3))
 
 
 def build_target(**kwargs) -> ReachyMiniTarget:

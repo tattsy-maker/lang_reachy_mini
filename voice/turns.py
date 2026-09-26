@@ -25,15 +25,23 @@ DEFAULT_PATIENCE_MS = 1800
 # Below this the request is meaningless: Gemini's own default is already
 # shorter than a thinking pause.
 MIN_PATIENCE_MS = 500
-# The audio kept from before the detected start of speech, so a soft
-# first syllable is not lost.
-PREFIX_PADDING_MS = 300
+# Gemini's ``prefix_padding_ms`` is NOT audio kept from before the start
+# of speech (this comment said so until 2026-09-25). google.genai's own
+# docs: "the required duration of detected speech before start-of-speech
+# is committed. The lower this value the more sensitive the start-of-
+# speech detection is and the shorter speech can be recognized." At 300
+# a quick one-word answer -- "hola", "nǐ hǎo" -- could go unnoticed: at
+# the Faire "the first half second when they say hello in a different
+# language was not heard, so they had to repeat two or three times".
+DEFAULT_ONSET_MS = 100
 
 
-def vad_settings(patience_ms: int | None) -> dict | None:
+def vad_settings(patience_ms: int | None,
+                 onset_ms: int = DEFAULT_ONSET_MS) -> dict | None:
     """The Gemini VAD settings for a patience value, as plain values
     (enum *names* from google.genai.types), or None for "leave Gemini's
-    defaults alone" (``patience_ms`` of 0 or None)."""
+    defaults alone" (``patience_ms`` of 0 or None). ``onset_ms``: how
+    much speech makes a start (``--turn-onset-ms``)."""
     if not patience_ms or patience_ms <= 0:
         return None
     patience_ms = max(MIN_PATIENCE_MS, int(patience_ms))
@@ -42,7 +50,7 @@ def vad_settings(patience_ms: int | None) -> dict | None:
         # turn over; the silence itself is the number below.
         "end_sensitivity": "END_SENSITIVITY_LOW",
         "silence_duration_ms": patience_ms,
-        "prefix_padding_ms": PREFIX_PADDING_MS,
+        "prefix_padding_ms": max(20, int(onset_ms)),
     }
 
 

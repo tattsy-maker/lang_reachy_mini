@@ -19,9 +19,22 @@
 #   BOOTH_AUDIO_DEVICE  substring of the robot's speaker device (default
 #                       "Reachy Mini Audio"); also the fallback mic
 #   BOOTH_FACE_SOURCE   camera for face recognition (default 0 = /dev/video0)
-#   BOOTH_ABSENT_SECS   walk-away timer (default 60; "still there?" at 2/3)
-#   BOOTH_ATTRACT_SECS  idle attractor: nobody in frame this long -> a short
-#                       dance every few minutes (default 120; 0 = off)
+#   BOOTH_ABSENT_SECS   walk-away timer (default 20 since 2026-09-25, was 60;
+#                       "still there?" at 2/3)
+#   BOOTH_ATTRACT_SECS  idle attractor: nobody in frame this long -> a
+#                       dance (default 5; 0 = off), then the next one
+#   BOOTH_ATTRACT_EVERY seconds after the last one started, or as soon as
+#                       it ends (default 12: mostly dancing when idle)
+#   BOOTH_IDLE_GLANCE_SECS  between dances, a small random head glance
+#                       about this often (default 4; 0 = off)
+#   BOOTH_BARGE_IN      cloud: 1 (default) = a visitor can interrupt the
+#                       robot by talking over it; 0 = the robot always
+#                       finishes (the pre-2026-09-25 mute)
+#   BOOTH_BARGE_IN_MARGIN_DB  how far above the robot's own echo a voice
+#                       must be to interrupt (default 10; grep 'barge-in:')
+#   BOOTH_ONBOARDING    quick (default: "which language, what level?" and
+#                       the lesson starts, nothing stored unless they ask
+#                       to be remembered) or full (the T17.4 interview)
 #   BOOTH_PERSONA       booth (default: gentle quips + wishlist question)
 #                       or plain
 #   BOOTH_NATIVE_LANGUAGE  local speech only: the language the robot
@@ -29,15 +42,28 @@
 #                       text), e.g. ru; unset = en. Cloud mode reads each
 #                       learner's own language from their profile.
 #   BOOTH_TURN_PATIENCE_MS  cloud: silence before Gemini takes the turn
-#                       (default 1800, T17.1; 0 = Gemini's default). Every
-#                       reply starts that much later; a thinking pause is
-#                       not the end of a sentence.
+#                       (default 1200 since 2026-09-25, was 1800 from T17.1;
+#                       0 = Gemini's default). Every reply starts that much
+#                       later; a thinking pause is not the end of a
+#                       sentence, but at the Faire visitors waited "a few
+#                       seconds too long" after saying a word back.
+#   BOOTH_TURN_ONSET_MS cloud: speech needed before Gemini notices the
+#                       visitor started (default 100, was 300: a quick
+#                       "hola" went unheard; raise it if hall noise
+#                       starts turns)
+#   BOOTH_CALL_OUT_SECS nobody at the robot but someone watching from a
+#                       few steps away: invite them over out loud, at
+#                       most this often (default 40; 0 = off)
 #   BOOTH_SPEECH_RATE   play the robot's speech at this speed, pitch kept
 #                       (default 1.0 = off; 0.85 = fifteen percent slower,
 #                       T17.10 -- try the prompt first, read 'pace:' lines)
-#   BOOTH_VOLUME        speaker volume at startup, percent (default 90).
-#                       set_volume changes it during a visit; every
-#                       start puts it back here.
+#   BOOTH_VOLUME        speaker volume at startup, percent (default 100,
+#                       the mixer's top). set_volume changes it during a
+#                       visit; every start puts it back here.
+#   BOOTH_LOUDNESS_DB   louder than the mixer can go: soft-clip drive on
+#                       the robot's speech (default 12 = about 8 dB
+#                       louder; 9 = about 6.5, 0 = off). Turn it down if
+#                       the voice sounds harsh (voice/loudness.py).
 #   BOOTH_EXTRA_AGENT   extra flags appended to the agent command
 #   BOOTH_SERVICE       1 = unattended (systemd, booth/reachy-booth.service):
 #                       wait for the robot, camera and network instead of
@@ -61,12 +87,20 @@ MODEL="${BOOTH_MODEL:-claude-haiku-4-5-20251001}"
 AUDIO_DEVICE="${BOOTH_AUDIO_DEVICE:-Reachy Mini Audio}"
 MIC_DEVICE="${BOOTH_MIC_DEVICE:-USB Composite Device}"
 FACE_SOURCE="${BOOTH_FACE_SOURCE:-0}"
-ABSENT_SECS="${BOOTH_ABSENT_SECS:-60}"
-ATTRACT_SECS="${BOOTH_ATTRACT_SECS:-120}"
+ABSENT_SECS="${BOOTH_ABSENT_SECS:-20}"
+ATTRACT_SECS="${BOOTH_ATTRACT_SECS:-5}"
+ATTRACT_EVERY="${BOOTH_ATTRACT_EVERY:-12}"
+IDLE_GLANCE_SECS="${BOOTH_IDLE_GLANCE_SECS:-4}"
+BARGE_IN="${BOOTH_BARGE_IN:-1}"
+BARGE_IN_MARGIN_DB="${BOOTH_BARGE_IN_MARGIN_DB:-10}"
+ONBOARDING="${BOOTH_ONBOARDING:-quick}"
 PERSONA="${BOOTH_PERSONA:-booth}"
 NATIVE_LANGUAGE="${BOOTH_NATIVE_LANGUAGE:-}"
-TURN_PATIENCE_MS="${BOOTH_TURN_PATIENCE_MS:-1800}"
+TURN_PATIENCE_MS="${BOOTH_TURN_PATIENCE_MS:-1200}"
+TURN_ONSET_MS="${BOOTH_TURN_ONSET_MS:-100}"
+CALL_OUT_SECS="${BOOTH_CALL_OUT_SECS:-40}"
 SPEECH_RATE="${BOOTH_SPEECH_RATE:-1.0}"
+LOUDNESS_DB="${BOOTH_LOUDNESS_DB:-12}"
 ZENOH_LISTEN="tcp/0.0.0.0:7447"
 BROKER="zenoh://127.0.0.1:7447"
 SERVICE="${BOOTH_SERVICE:-}"
@@ -127,7 +161,7 @@ grep -qs . /proc/asound/cards && ok "sound card visible" \
     || die "no sound card (audio group membership? see CLAUDE.md)"
 # The robot's speaker at a known level (2026-09-23: one visitor's "louder"
 # or "quieter" used to carry over to every visitor after them).
-VOLUME="${BOOTH_VOLUME:-90}"
+VOLUME="${BOOTH_VOLUME:-100}"
 card=$(awk -v d="$AUDIO_DEVICE" 'index($0, d) {print $1; exit}' /proc/asound/cards)
 if [ -n "$card" ] && amixer -c "$card" sset PCM,0 "$VOLUME%" >/dev/null 2>&1; then
     amixer -c "$card" sset PCM,1 "$VOLUME%" >/dev/null 2>&1
@@ -144,7 +178,10 @@ else
 fi
 
 SESSION_FLAGS=(--session --face-source "$FACE_SOURCE"
-               --absent-secs "$ABSENT_SECS" --attract-secs "$ATTRACT_SECS")
+               --absent-secs "$ABSENT_SECS" --attract-secs "$ATTRACT_SECS"
+               --attract-every "$ATTRACT_EVERY" --onboarding "$ONBOARDING"
+               --idle-glance-secs "$IDLE_GLANCE_SECS"
+               --call-out-secs "$CALL_OUT_SECS")
 if [ -r "/dev/video$FACE_SOURCE" ] 2>/dev/null || [ -r "$FACE_SOURCE" ]; then
     ok "camera readable (face source $FACE_SOURCE)"
 else
@@ -185,11 +222,15 @@ if daemon_ready; then
     ok "reachy daemon already running (warm start)"
 else
     say "-- starting reachy daemon (~15 s cold) --"
+    # --no-wake-up-on-start (2026-09-25): the vendor's wake-up ends with a
+    # 20-degree head snap in 0.4 s. The agent wakes the robot slowly
+    # itself (wake_gently in voice/agent.py).
     if [ -n "$SERVICE" ]; then
-        .venv/bin/reachy-mini-daemon >> "$SERVE_LOG" 2>&1 &
+        .venv/bin/reachy-mini-daemon --no-wake-up-on-start >> "$SERVE_LOG" 2>&1 &
     else
         # Hand-started: the daemon outlives the booth, as the runbook says.
-        setsid .venv/bin/reachy-mini-daemon >> "$SERVE_LOG" 2>&1 < /dev/null &
+        setsid .venv/bin/reachy-mini-daemon --no-wake-up-on-start \
+            >> "$SERVE_LOG" 2>&1 < /dev/null &
     fi
     for i in $(seq 1 60); do daemon_ready && break; sleep 1; done
     daemon_ready || die "reachy daemon not ready after 60 s; tail $SERVE_LOG"
@@ -235,7 +276,11 @@ MODEL_FLAGS=(--speech "$SPEECH")
 [ "$SPEECH" = local ] && MODEL_FLAGS+=(--model "$MODEL")
 [ "$SPEECH" = local ] && [ -n "$NATIVE_LANGUAGE" ] \
     && MODEL_FLAGS+=(--native-language "$NATIVE_LANGUAGE")
-MODEL_FLAGS+=(--turn-patience-ms "$TURN_PATIENCE_MS" --speech-rate "$SPEECH_RATE")
+MODEL_FLAGS+=(--turn-patience-ms "$TURN_PATIENCE_MS" --turn-onset-ms "$TURN_ONSET_MS"
+             --speech-rate "$SPEECH_RATE"
+             --loudness-db "$LOUDNESS_DB")
+[ "$SPEECH" = cloud ] && [ "$BARGE_IN" = 1 ] \
+    && MODEL_FLAGS+=(--barge-in --barge-in-margin-db "$BARGE_IN_MARGIN_DB")
 # Directly exec python (no subshell): the shutdown trap must SIGINT the
 # real agent process, not a wrapper that would swallow the signal.
 voice/.venv/bin/python voice/agent.py \

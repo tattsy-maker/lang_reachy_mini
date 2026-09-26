@@ -158,8 +158,17 @@ thirds), `BOOTH_ATTRACT_SECS` (idle dance; 0 = off), `BOOTH_PERSONA`
 mic, default `USB Composite Device`; when it is not plugged in the
 robot's own mic is used -- see the two-mics trap below),
 `BOOTH_TURN_PATIENCE_MS` (T17.1: silence before Gemini takes the turn,
-default 1800; 0 = Gemini's default), `BOOTH_SPEECH_RATE` (T17.10: play
-replies slower, pitch kept; default 1.0 = off). Face tracking,
+booth default 1200 since T19.8, agent default 1800; 0 = Gemini's
+default), `BOOTH_TURN_ONSET_MS` (T19.8: speech before a turn starts,
+default 100), `BOOTH_CALL_OUT_SECS` (T19.9: invite an onlooker over,
+at most this often, default 40; 0 = off), `BOOTH_SPEECH_RATE` (T17.10: play
+replies slower, pitch kept; default 1.0 = off), `BOOTH_LOUDNESS_DB`
+(T18.1: soft-clip drive, default 12 = about 8 dB louder; 0 = off),
+`BOOTH_ONBOARDING` (T18.3: `quick` default, `full` = the T17.4
+interview), `BOOTH_ATTRACT_EVERY` (T18.4: seconds from one idle move's
+start to the next, default 12; `BOOTH_ATTRACT_SECS` now defaults to 5),
+`BOOTH_IDLE_GLANCE_SECS` (T18.5: head glances between dances, default
+4). `BOOTH_ABSENT_SECS` defaults to 20 since 2026-09-25 (was 60). Face tracking,
 voice prints and
 the `look` tool are on by default with a camera. Visitors swap without
 anyone touching the keyboard: a walk-away or a changed voice ends the
@@ -231,8 +240,11 @@ substrings tried in order, default the USB desk mic, falling back to the
 `--audio-device` mic; 2026-09-04) · `--voice-source WAV` (testing: hear this file
 as the visitor at each `--say`) · `--turn-patience-ms N` (T17.1, cloud:
 Gemini's end-of-turn silence, default 1800) · `--speech-rate R` (T17.10:
-WSOLA time stretch of the reply audio, 1.0 = off). Tools the model can
-call besides motion: `save_session_notes`, `update_learner_level`,
+WSOLA time stretch of the reply audio, 1.0 = off) · `--loudness-db D`
+(T18.1, 0 = off) · `--onboarding quick|full` (T18.3, default quick) ·
+`--attract-every S` (T18.4). Tools the model can
+call besides motion: `start_lesson` (T18.3: a guest lesson for a
+newcomer, nothing stored), `save_session_notes`, `update_learner_level`,
 `set_learner_goal`, `set_target_language`, `set_native_language` (T16:
 the language explanations are given in), `forget_me`, `intake_answer`
 and `enroll_new_learner` (T17.4: the interview, one field per call;
@@ -396,7 +408,14 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   (default 1800) is added to every reply's `turn: first sound` number;
   the 2026-09-05 median was 2.2 s with Gemini's default. Do not "fix"
   the lag by lowering it without a session's worth of `heard:` lines
-  showing nobody was cut off.
+  showing nobody was cut off. The booth went to 1200 on 2026-09-25
+  (T19.8) on the Faire's own evidence: median 3.1 s, p90 5.8 s, and
+  visitors left waiting after saying a word back.
+- **`prefix_padding_ms` is not a pre-roll (T19.8).** In Gemini Live it is
+  how much speech must be detected before a start is committed. It was
+  300 under a comment saying the opposite, and a quick "hola" went
+  unheard ("they had to repeat two or three times"). Now 100
+  (`--turn-onset-ms`); raise it only if hall noise starts turns.
 - **Read `heard:` before theorising (T17.7).** The visitor's words are
   now INFO lines next to `said:`; older logs have them only as pipecat
   DEBUG `[Transcription:user]` lines. `tests/t17/judge_corrections.py
@@ -458,6 +477,81 @@ script wipes guests on shutdown, or `python tutor/wipe_guests.py`.
   says whether the two Pollen HuggingFace libraries are present;
   `--preload` fetches them. The booth preflight does this with a 60 s
   cap; without them `perform` only has `spin` and `wiggle`.
+- **The mixer is already at the top (2026-09-25).** Both `PCM` controls
+  are 60/60 = 0 dB, and Gemini's audio peaks at 0 dBFS, so amixer and
+  plain gain have nothing left. Louder comes from `--loudness-db` (a
+  soft clip, `voice/loudness.py` has the measurements); if the voice
+  sounds harsh, lower `BOOTH_LOUDNESS_DB` (9 is about +6.5 dB, 6 about
+  +4.5, on Gemini 3.1's audio). `grep "loudness:" voice/run.log` shows
+  what a run used.
+- **A language missing from the prompt gets refused (2026-09-25).** The
+  base prompt says to refuse any language it does not list; cloud mode
+  listed eight plus "most other languages", and Gemini told a visitor
+  "I do not speak Arabic yet" while the tool had accepted `ar`. Cloud
+  mode now lists Gemini Live's 99 by name (`cloud_language_names()`).
+- **Quick start stores nothing (T18.3).** `tutor: quick lesson: ar,
+  beginner, taught in en (a guest, nothing stored)` is a newcomer's
+  lesson; there is no profile, so `save_session_notes` answers "a
+  guest" and a walk-away saves nothing. Only "remember me" enrolls,
+  after `intake_answer` name + goal. `--onboarding full` brings back
+  the T17.4 interview.
+- **Idle is mostly dancing (T18.4/T18.5).** With nobody in frame the
+  robot dances ~85 % of the time: first move 5 s after the frame
+  empties, the next as soon as it ends (12 s start to start), random
+  head glances (`--idle-glance-secs`) in the gaps. A recorded pass
+  costs ~1.7 s beyond its clip (1 s to the first frame, 0.6 s base
+  settle, `moves.PASS_OVERHEAD_SECS`); a glance sent during a move is
+  refused (`accepted=False, a recorded move is playing`), harmless. A
+  visitor who walks up mid-move gets `attractor: a visitor arrived
+  mid-X; stopping it` and the robot goes home before the greeting.
+  After a visitor leaves, the 20 s walk-away timer ("still there?" at
+  13 s) is the only still time. Only smooth moves idle: the sharp clips
+  (electric, stumble, chicken, grid snap) and 1 s `home` drops scared a
+  girl on 2026-09-25; `home` is 2 s now.
+- **A guest lesson survives a new face (2026-09-25).** At the Faire the
+  T15 face swap ended a quick-start session five times in three minutes
+  with one group of kids (a passer-by starts it, the real visitor is
+  "someone else" 4 s later): each end was a head drop and a new "Hello,
+  I am Reachy". With nobody enrolled or being confirmed, a different
+  face now just becomes the session's face (`session: someone new in
+  front of the robot; a guest lesson, so carrying on`). An enrolled
+  learner still gets the swap.
+- **Voice presence is bounded in the booth (2026-09-25).** Hall chatter
+  kept empty sessions alive and re-asked "¿Sigues ahí?" three times in
+  70 s. `--voice-hold-secs 45`: voice (the energy gate, and since the
+  same day every `heard:` transcript) keeps a session alive only 45 s
+  past the last face, and only a face re-arms "still there?". Without
+  the flag, T13.2's home behaviour stands.
+- **Barge-in (`--barge-in`, booth on) needs a mic that can tell the
+  robot from the visitor.** Cloud mode swaps `AlwaysUserMuteStrategy`
+  for `barge_in.EchoGatedUserMuteStrategy`: mid-reply the mic opens when
+  it hears a voice `--barge-in-margin-db` (10) above the robot's own
+  echo, and Gemini interrupts itself. With the desk mic's Auto Gain
+  Control on, the echo read -4 to -8 dBFS -- as loud as anyone -- so it
+  never triggered; AGC was turned off by hand at 13:47 on 2026-09-25
+  (`sg audio -c "amixer -c 1 sset 'Auto Gain Control' off"`; the card
+  number is the `USB Composite Device` one; this does not survive a
+  replug). `grep "barge-in:" voice/run.log` gives the echo level every
+  ten replies and each interruption.
+- **The vendor daemon's wake-up is off (T19.1).** Started with
+  `--no-wake-up-on-start`: its wake ends in a 20-degree head snap in
+  0.4 s. The agent's `wake_gently` rises over 3.5 s instead (`robot:
+  awake` in the log). A daemon started by hand without the flag brings
+  the snap back.
+- **Recorded moves play at `MoveSpec.speed` (T19.7).** Fast clips are
+  time-stretched to stay inside `moves.CALM`; `moves.py --measure` shows
+  every clip's peak speeds as played and the speed CALM would give it.
+  Adding a clip: measure it and set its speed; `tests/t19` checks every
+  cached clip against CALM. `pass_secs`, not `seconds`, is how long a
+  pass plays.
+- **`look` is for when the visitor asks (T19.4).** Not to check who is
+  there (face recognition does that) and never from an earlier frame. A
+  `look:` line after "Hello" or "Close the door" means the prompt
+  drifted again.
+- **Call-outs (T19.9).** `attractor: someone looking from a few steps
+  away ... calling out` is a face 1.3-3 m off while nobody is being
+  served; Gemini invites them over. A still face (a poster) is called to
+  once, and a bystander who watched a lesson is not new when it ends.
 
 ## First-time setup on a fresh clone
 

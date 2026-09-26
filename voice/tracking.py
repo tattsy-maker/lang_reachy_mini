@@ -153,6 +153,10 @@ class FaceTracker:
                                   self._clock() + max(0.0, seconds))
         self._stale = self._stale or stale
 
+    def resume(self) -> None:
+        """End a suspension early (a dance cut short by a visitor)."""
+        self._suspend_until = min(self._suspend_until, self._clock())
+
     def reset(self) -> None:
         """The robot went home: estimates back to zero, nothing stale."""
         self._yaw = self._body = self._pitch = 0.0

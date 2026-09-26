@@ -725,7 +725,7 @@ class ReachyMiniDriver(DeviceDriver):
     async def list_moves(self) -> Dict[str, Any]:
         """The curated recorded-move library: name, seconds, description."""
         from moves import LIBRARY
-        return {"moves": [{"name": m.name, "seconds": m.seconds,
+        return {"moves": [{"name": m.name, "seconds": round(m.pass_secs, 1),
                            "description": m.description}
                           for m in LIBRARY.values()]}
 
@@ -769,17 +769,19 @@ class ReachyMiniDriver(DeviceDriver):
                                      name="wiggle")
                 left = self._target.get_cmd("antenna_left")
                 right = self._target.get_cmd("antenna_right")
-                await asyncio.to_thread(self._target.goto, 0.25,
-                                        antenna_left=1.3, antenna_right=-1.3)
+                # 0.5 s each way, not 0.25 (2026-09-25: "antennas
+                # moving very quickly like saw blades").
+                await asyncio.to_thread(self._target.goto, 0.5,
+                                        antenna_left=1.0, antenna_right=-1.0)
                 self._checkpoint(motion_id)
-                return await asyncio.to_thread(self._target.goto, 0.25,
+                return await asyncio.to_thread(self._target.goto, 0.5,
                                                antenna_left=left,
                                                antenna_right=right)
             posture = None
             for i in range(repeat):
                 self._checkpoint(motion_id)
                 await self._progress(motion_id, "play_move", phase="playing",
-                                     name=spec.name, seconds=spec.seconds,
+                                     name=spec.name, seconds=spec.pass_secs,
                                      pass_=i + 1, of=repeat)
                 posture = await asyncio.to_thread(self._target.play_move,
                                                   spec.name)
@@ -787,7 +789,7 @@ class ReachyMiniDriver(DeviceDriver):
 
         return await self._begin("play_move",
                                  {"name": spec.name, "repeat": repeat,
-                                  "seconds": spec.seconds * repeat},
+                                  "seconds": spec.pass_secs * repeat},
                                  run)
 
     @rpc(labels={"direction": "write", "safety": "critical", "motion": "true"})

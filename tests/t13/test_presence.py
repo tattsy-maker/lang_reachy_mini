@@ -99,7 +99,7 @@ class Runner(SessionRunner):
     async def _robot_neutral(self):
         self.went_neutral += 1
 
-    async def _perform(self, name, seconds):
+    async def _perform(self, name, seconds, repeat=1):
         self.performed.append((name, seconds))
 
 

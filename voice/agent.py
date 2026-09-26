@@ -111,8 +111,8 @@ from piper_tts import (                                                 # noqa: 
 from tutor_mode import (                                                # noqa: E402
     BRIEFING_SESSIONS,
     DEFAULT_LEARNERS_ROOT,
+    ONBOARDING,
     PERSONAS,
-    STRANGER_BRIEFING,
     CurrentLearner,
     LearnerStore,
     build_briefing,
@@ -120,16 +120,20 @@ from tutor_mode import (                                                # noqa: 
     build_persona,
     build_tutor_tools,
     build_unsure_briefing,
+    stranger_briefing,
     catch_feedback,
+    cloud_language_names,
     language_name,
     load_learner,
     native_language_of,
     voice_cue,
 )
 from tracking import FaceTracker, TrackingLoop                          # noqa: E402
-from turns import DEFAULT_PATIENCE_MS, to_gemini_vad_params, vad_settings  # noqa: E402
+from turns import (DEFAULT_ONSET_MS, DEFAULT_PATIENCE_MS,  # noqa: E402
+                   to_gemini_vad_params, vad_settings)
 from budget import SightseeingBudget                                    # noqa: E402
 from pace import Stretcher, pace_line                                   # noqa: E402
+from loudness import SoftClip, louder_by_db                             # noqa: E402
 from audio_devices import (                                             # noqa: E402
     MIC_DEVICE_NAME,
     SPEAKER_DEVICE_NAME,
@@ -260,12 +264,20 @@ do not describe surroundings or invent details."""
 # describe you, I only see you to recognize you" and then, ten seconds
 # later, describe the visitor's hair (2026-09-04) -- the prompt and the
 # tool contradicted each other. T15.4.
+# 2026-09-25 (the Faire's first day): "sometimes it would start saying
+# what it was seeing while we did not ask", and it described "a camera
+# frame that was taken too long ago and was not true anymore". The log
+# had look called on a "Hello", a "Close the door", a "New person" -- the
+# old "or you want to check who is in front of you" invited it.
 VISION_FACE_LOOK = """\
 You have a camera. On your own you use it only to recognize faces: you know \
 when someone is in front of you, and who they are if you have met them; you \
-do not watch the room. When someone asks what you see, or you want to check \
-who is in front of you, call look and describe that one picture in a \
-sentence or two. Never say you cannot see; never describe anything you did \
+do not watch the room. Call look only when the visitor asks what you see or \
+asks you to look at something, and then describe that one picture in a \
+sentence or two. Never call it on your own, to check who is there or \
+because a voice sounded different. Every such question gets a fresh look: \
+people move, so never describe or bring up a picture from earlier in the \
+conversation. Never say you cannot see; never describe anything you did \
 not just look at."""
 
 
@@ -291,6 +303,34 @@ including whole sentences: 'library' is [es]la biblioteca[/es]; \
 pick the voice for that text and are never read aloud. Never tag {main}, \
 and never mention the tags.
 """
+
+
+# Waking up (2026-09-25). The vendor daemon's own wake-up rises and then
+# snaps the head 20 degrees sideways and back in 0.4 s ("an abrupt head
+# movement to the right-down"), and our 1 s home swung the antennas up
+# from their folded sleep pose at over 300 deg/s. The booth now starts the
+# daemon with --no-wake-up-on-start and wakes the robot here instead:
+# a slow rise, a short pause, one unhurried antenna stretch.
+WAKE_RISE_SECS = 3.5
+WAKE_STRETCH = 0.35          # radians each antenna tilts, then back
+
+
+async def wake_gently(robot) -> None:
+    """Raise the head from wherever it rests (the sleep pose, usually) to
+    neutral, slowly, then stretch the antennas once. Returns when done."""
+    try:
+        await robot.call("home", duration=WAKE_RISE_SECS)
+        await asyncio.sleep(WAKE_RISE_SECS + 0.4)
+        await robot.call("goto_posture", duration=0.9,
+                         antenna_left=WAKE_STRETCH,
+                         antenna_right=-WAKE_STRETCH)
+        await asyncio.sleep(1.1)
+        await robot.call("goto_posture", duration=1.0,
+                         antenna_left=0.0, antenna_right=0.0)
+        await asyncio.sleep(1.0)
+        logger.info("robot: awake (%.1fs rise)", WAKE_RISE_SECS)
+    except Exception as exc:                                # noqa: BLE001
+        logger.warning("robot: wake-up move failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +405,8 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None,
     instead of sending anything, and the embodiment is held quiet: the
     move owns the whole body, and the driver would refuse the nudge
     anyway."""
-    from moves import LIBRARY, describe as describe_moves
+    from moves import (LIBRARY, describe as describe_moves,
+                       names as move_names)
 
     moving = {"until": -math.inf, "name": None}
 
@@ -425,11 +466,11 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None,
 
     async def perform(params):
         name = str(params.arguments.get("move", "dance")).strip().lower()
-        spec = LIBRARY.get(name)
+        spec = LIBRARY.get(name) if name in move_names() else None
         if spec is None:
             await params.result_callback(
                 {"error": "unknown move; choose one of "
-                          + ", ".join(LIBRARY)})
+                          + ", ".join(move_names())})
             return
         try:
             seconds = float(params.arguments.get("seconds") or 0)
@@ -444,9 +485,11 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None,
             logger.info("perform: %s trimmed to one pass during a lesson "
                         "(asked for %d)", spec.name, passes)
             passes = 1
-        total = spec.seconds * passes
+        # Each recorded pass also spends ~1.7 s reaching its first frame
+        # and settling the base (moves.PASS_OVERHEAD_SECS), and a clip
+        # slowed to its calm speed plays longer than it was recorded.
+        total = passes * spec.pass_secs
         robot.perform(spec.name, repeat=passes)
-        # 1 s for the vendor's initial goto to the first frame, 1 s slack.
         moving["until"] = time.monotonic() + total + 2.0
         moving["name"] = spec.name
         if tracker is not None:
@@ -477,10 +520,12 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None,
         if (busy := dance_in_progress()):
             await params.result_callback(busy)
             return
-        # A quick flick out and back. Fire-and-forget so speech continues.
-        robot.posture(duration=0.25, antenna_left=1.3, antenna_right=-1.3)
-        await asyncio.sleep(0.3)
-        robot.posture(duration=0.25, antenna_left=0.15, antenna_right=-0.15)
+        # A flick out and back. Fire-and-forget so speech continues.
+        # 2026-09-25: was 1.3 rad in 0.25 s each way (peaks over 500
+        # deg/s, "antennas moving like saw blades"); now half that pace.
+        robot.posture(duration=0.5, antenna_left=1.0, antenna_right=-1.0)
+        await asyncio.sleep(0.55)
+        robot.posture(duration=0.5, antenna_left=0.15, antenna_right=-0.15)
         await params.result_callback({"wiggled": True})
 
     async def reset_pose(params):
@@ -564,7 +609,7 @@ def build_tools(robot: RobotLink, tracker: FaceTracker | None = None,
                         + describe_moves() + ". Say something short "
                         "while it plays; it takes a few seconds.",
             properties={"move": {"type": "string",
-                                 "enum": list(LIBRARY),
+                                 "enum": move_names(),
                                  "description": "which move"},
                         "seconds": {"type": "number",
                                     "description": "how long to keep it "
@@ -664,7 +709,8 @@ def build_look_tool(hub, speech: str, task_ref: dict, gemini_ref: dict,
                  "note": "an image of what your camera sees right now was "
                          "just sent to you; describe it from that image "
                          "in one or two sentences, in the conversation's "
-                         "language. " + grounding})
+                         "language. " + grounding + " This picture is for "
+                         "this answer only: do not mention it again later."})
             return
         task = task_ref.get("task")
         request = UserImageRequestFrame(
@@ -677,13 +723,15 @@ def build_look_tool(hub, speech: str, task_ref: dict, gemini_ref: dict,
         await params.result_callback(
             {"looked": True,
              "note": "describe the attached camera image in one or two "
-                     "sentences. " + grounding})
+                     "sentences. " + grounding + " This picture is for "
+                     "this answer only: do not mention it again later."})
 
     return [FunctionSchema(
         name="look",
         description="Take one look through your camera and see what is in "
-                    "front of you right now. Use it when the visitor asks "
-                    "what you see. Not for telling who someone is: face "
+                    "front of you right now. Only when the visitor asks "
+                    "what you see or asks you to look at something; never "
+                    "on your own. Not for telling who someone is: face "
                     "recognition does that, and a changed voice or "
                     "language is not a new person. One still image, not a "
                     "video.",
@@ -1092,13 +1140,14 @@ async def run(args) -> None:
 
     # -- robot ------------------------------------------------------------
     robot = None
+    wake_task = None
     if not args.no_robot:
         robot = await RobotLink(args.broker, args.device_id, args.tenant,
                                 zenoh_listen=args.zenoh_listen).connect()
         # The daemon holds the mic and speaker until asked to let go.
         logger.info("asking the robot to release its mic and speaker ...")
         logger.info("media: %s", await robot.release_media(True))
-        robot.home(duration=1.0)
+        wake_task = asyncio.create_task(wake_gently(robot))
 
     # -- audio device ------------------------------------------------------
     # USB mic if present, else the robot's own; speaker always the robot's.
@@ -1157,6 +1206,7 @@ async def run(args) -> None:
                                 start_lang, ", ".join(sorted(speakable))))
         start_voice = args.voice or speakable[start_lang].voice
         spoken_names = ", ".join(v.name for v in speakable.values())
+        interview_languages = spoken_names
         # The span-tag rule is local-only: per-language voices need it,
         # a speech-to-speech model would read the brackets aloud.
         tutor_mode = bool(args.learner or args.face_source or args.session)
@@ -1194,8 +1244,13 @@ async def run(args) -> None:
     else:
         # Cloud mode (T8): one speech-to-speech model, one voice, native
         # mixed-language handling -- no tags, no router, no local engines.
-        spoken_names = ("English, Spanish, French, Italian, Portuguese, "
-                        "Russian, Mandarin, Hindi, and most other languages")
+        # Gemini Live's whole list, by name. "Eight languages and most
+        # others" made it tell a visitor "I do not speak Arabic yet"
+        # (2026-09-25): the base prompt says to refuse anything unlisted.
+        spoken_names = cloud_language_names()
+        # The interview names none of them: the list above is already in
+        # the prompt once, and ninety-nine names twice is just latency.
+        interview_languages = "any language you speak"
         # Measured (progress/T8.md): Gemini Live sometimes speaks the
         # goodbye but skips the save_session_notes call the briefing
         # demands. Claude does not need this reminder; Gemini does.
@@ -1210,8 +1265,9 @@ async def run(args) -> None:
         base_prompt = SYSTEM_PROMPT.format(
             languages=spoken_names,
             vision=vision_text(args)) + """
-You can teach every language you can speak, Russian and Mandarin included, \
-and English to a speaker of any other language. Explain in the student's \
+You can teach every one of those languages, Arabic, Russian and Mandarin \
+included, and English to a speaker of any other language. Never tell \
+anyone you do not speak a language on that list. Explain in the student's \
 own language, whatever it is. If a student asks to practice a different \
 language, switch at once and call set_target_language; if they ask to be \
 taught in a different language, call set_native_language.
@@ -1322,10 +1378,11 @@ emit the tool call in that same turn, alongside anything you say.""".format(
                 system_prompt += build_briefing(ident.learner, notes)
             elif ident.status == "unsure":
                 holder.candidate = ident.learner
-                system_prompt += build_unsure_briefing(holder.candidate)
+                system_prompt += build_unsure_briefing(
+                    holder.candidate, quick=args.onboarding == "quick")
             else:  # unknown face, or no face at all: same stranger flow
-                system_prompt += STRANGER_BRIEFING.format(
-                    languages=spoken_names)
+                system_prompt += stranger_briefing(args.onboarding,
+                                                   interview_languages)
         tools = tools + build_tutor_tools(store, holder,
                                           wishes_path=args.wishes_file,
                                           ask_wish=(args.persona == "booth"))
@@ -1368,7 +1425,10 @@ emit the tool call in that same turn, alongside anything you say.""".format(
                 store, holder, args.face_source,
                 frames_factory=(hub.frames if hub is not None else None),
                 voice_identity=voice_identity,
-                intake=Intake(),          # T17.4: the interview, enforced
+                # T17.4: the interview, enforced; 2026-09-25: in quick
+                # onboarding only a visitor who asks to be remembered is
+                # interviewed, and only for name and goal.
+                intake=Intake(quick=args.onboarding == "quick"),
                 # T15.1: the session runner (built below) knows which
                 # face started the session; enrollment stores that one
                 # when the capture disagrees with it.
@@ -1487,6 +1547,15 @@ emit the tool call in that same turn, alongside anything you say.""".format(
         # Gemini supports barge-in, but the robot's speaker and mic are
         # centimetres apart with no echo cancellation, so full-duplex is
         # off until the booth mic proves otherwise (T11 decides).
+        # 2026-09-25 (--barge-in): the mute opens mid-reply when the mic
+        # hears someone clearly louder than the robot's own echo, and
+        # Gemini's own interruption handling does the rest (barge_in.py).
+        if args.barge_in and not args.no_mute:
+            from barge_in import make_strategy
+            mute_strategies = [make_strategy(margin_db=args.barge_in_margin_db),
+                               FunctionCallUserMuteStrategy()]
+            logger.info("barge-in: on (a visitor %.0f dB above the robot's "
+                        "echo interrupts it)", args.barge_in_margin_db)
         aggregators = LLMContextAggregatorPair(
             context,
             user_params=LLMUserAggregatorParams(
@@ -1497,6 +1566,11 @@ emit the tool call in that same turn, alongside anything you say.""".format(
     # T17.9: the visitor's words after the closing question are the
     # answer, whether or not the model calls record_wish.
     def heard_hook(text: str) -> None:
+        # 2026-09-25: a transcript is someone talking to the robot. The
+        # energy gate missed a short "Yes" from a visitor whose face was
+        # not being detected, and the walk-away timer ended their lesson.
+        if late.get("runner") is not None and text.strip():
+            late["runner"].note_voice()
         if holder is not None:
             feedback_path = None
             if args.wishes_file:
@@ -1509,6 +1583,16 @@ emit the tool call in that same turn, alongside anything you say.""".format(
     if args.speech_rate and abs(args.speech_rate - 1.0) > 1e-3:
         stretcher = Stretcher(1.0 / args.speech_rate)
         logger.info("pace: reply audio at %.2fx speed (WSOLA)", args.speech_rate)
+
+    # 2026-09-25: the mixer is already at 100 %; what is left is a denser
+    # waveform (loudness.py has the measurements). Last before the output.
+    loudness = None
+    if args.loudness_db > 0:
+        loudness = SoftClip(args.loudness_db)
+        logger.info("loudness: soft clip, %.0f dB drive (about %+.1f dB "
+                    "louder)", args.loudness_db,
+                    louder_by_db(args.loudness_db))
+    louder = [loudness.as_processor()] if loudness is not None else []
 
     if args.speech == "cloud":
         # T8: the three local speech stages collapse into one streaming
@@ -1529,12 +1613,14 @@ emit the tool call in that same turn, alongside anything you say.""".format(
         # T17.1: let the visitor finish. Gemini's server VAD ran on its
         # defaults through four family sessions; the mother was cut off
         # mid-thought twice on 2026-09-05.
-        vad = vad_settings(args.turn_patience_ms)
+        vad = vad_settings(args.turn_patience_ms, args.turn_onset_ms)
         if vad is not None:
             gemini_kwargs["settings"] = GeminiLiveLLMService.Settings(
                 vad=to_gemini_vad_params(vad))
             logger.info("turns: waiting %d ms of silence before a reply "
-                        "(end sensitivity low)", vad["silence_duration_ms"])
+                        "(end sensitivity low); %d ms of speech starts a "
+                        "turn", vad["silence_duration_ms"],
+                        vad["prefix_padding_ms"])
         else:
             logger.info("turns: Gemini's default end-of-turn detection")
         if args.session:
@@ -1567,6 +1653,7 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             after.append(stretcher.as_processor())
         pipeline = Pipeline(stages + [gemini] + after + [
             embodiment,      # observes speaking state, passes frames through
+        ] + louder + [
             transport.output(),
             aggregators.assistant(),
         ])
@@ -1586,16 +1673,23 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             tts,
         ] + ([stretcher.as_processor()] if stretcher is not None else []) + [
             embodiment,      # observes speaking state, passes frames through
+        ] + louder + [
             transport.output(),
             aggregators.assistant(),
         ])
 
+    # Session mode waits for visitors for as long as it takes. pipecat's
+    # idle timeout (5 min with no speech) cancelled the whole pipeline
+    # instead: at the Faire on 2026-09-25 the agent exited after every
+    # quiet five minutes (12:13, 13:37, 14:11, 14:49, 14:56, 15:02) and
+    # the service restarted the stack cold, ~35 s gone and a wake-up each
+    # time. The booth has its own watchdogs (heartbeat, Gemini connected).
     task = PipelineTask(pipeline, params=PipelineParams(
         audio_in_sample_rate=args.sample_rate,
         audio_out_sample_rate=args.sample_rate,
         enable_metrics=True,
         enable_usage_metrics=True,
-    ))
+    ), cancel_on_idle_timeout=not args.session)
     late["task"] = task
 
     async def say_cue(text: str) -> None:
@@ -1624,12 +1718,17 @@ emit the tool call in that same turn, alongside anything you say.""".format(
         session_runner = SessionRunner(
             source=args.face_source, store=store, holder=holder,
             context=context, task=task, base_prompt=base_prompt,
-            languages=spoken_names, robot=robot, stt=stt,
+            languages=interview_languages, robot=robot, stt=stt,
             stable_secs=args.stable_secs, absent_secs=args.absent_secs,
             hub=hub, tracker=tracker, attract_secs=args.attract_secs,
+            attract_every=args.attract_every,             # 2026-09-25
+            glance_every=args.idle_glance_secs,           # 2026-09-25
+            call_out_every=args.call_out_secs,            # 2026-09-25
+            voice_hold_secs=args.voice_hold_secs or None,  # 2026-09-25
             voice_identity=voice_identity,
             budget=budget,                                # T17.8
             snapshot_dir=args.look_dir or None,           # 2026-09-23
+            onboarding=args.onboarding,                   # 2026-09-25
             speaking=lambda: embodiment.bot_speaking,     # T15.6
             # Cloud mode (T14.3): cues go through Gemini's own injection
             # path and every visitor gets a fresh server-side session.
@@ -1643,7 +1742,16 @@ emit the tool call in that same turn, alongside anything you say.""".format(
             # T17.2: the voice asks the face before it asks the visitor.
             voice_identity.face_vouches = session_runner.face_vouches
         late["runner"] = session_runner
-        session_task = asyncio.create_task(session_runner.run())
+
+        async def run_session():
+            # Nothing else moves the robot until it has woken up: an idle
+            # glance 3 s in would cut the slow rise short.
+            if wake_task is not None:
+                with contextlib.suppress(Exception):
+                    await wake_task
+            await session_runner.run()
+
+        session_task = asyncio.create_task(run_session())
         logger.info("session mode: watching for a face (stable %.1fs, "
                     "still-there at %.0fs, walk-away %.0fs%s)",
                     args.stable_secs, args.absent_secs * 2 / 3,
@@ -1847,9 +1955,26 @@ def build_parser() -> argparse.ArgumentParser:
                    help="cloud mode: silence Gemini waits for before it "
                         "takes the turn (T17.1: a thinking pause is not the "
                         "end of a sentence); 0 = Gemini's default")
+    g.add_argument("--turn-onset-ms", type=int, default=DEFAULT_ONSET_MS,
+                   help="cloud mode: how much speech Gemini needs before "
+                        "it counts as the visitor starting to talk "
+                        "(prefix_padding_ms; lower hears a quick one-word "
+                        "answer, higher ignores more room noise)")
+    g.add_argument("--barge-in", action="store_true",
+                   help="cloud mode: let the visitor interrupt the robot "
+                        "by talking over it (the mic opens mid-reply when "
+                        "it hears someone well above the robot's echo)")
+    g.add_argument("--barge-in-margin-db", type=float, default=10.0,
+                   help="how far above the robot's own echo a voice must "
+                        "be to interrupt it (raise if it cuts itself off, "
+                        "lower if visitors cannot get in)")
     g.add_argument("--speech-rate", type=float, default=1.0,
                    help="play the robot's speech at this speed, pitch "
                         "kept (0.85 = fifteen percent slower); 1.0 = off")
+    g.add_argument("--loudness-db", type=float, default=0.0,
+                   help="make the robot's speech louder than the mixer "
+                        "can: soft-clip drive in dB (12 = about 8 dB "
+                        "louder, 9 = about 6.5); 0 = off")
 
     g = p.add_argument_group("model (cloud)")
     g.add_argument("--auth", default="api-key", choices=["api-key", "oauth"],
@@ -1893,6 +2018,27 @@ def build_parser() -> argparse.ArgumentParser:
                    help="session mode: with nobody in frame this long, "
                         "play a short move every few minutes to draw "
                         "people in (0 = off)")
+    g.add_argument("--attract-every", type=float, default=180.0,
+                   help="session mode: seconds between attract moves "
+                        "while the frame stays empty")
+    g.add_argument("--voice-hold-secs", type=float, default=45.0,
+                   help="session mode: voice keeps a session alive only "
+                        "this long after the visitor's face was last seen "
+                        "(a hall full of chatter; 0 = forever)")
+    g.add_argument("--call-out-secs", type=float, default=0.0,
+                   help="session mode: nobody in front of the robot but "
+                        "someone watching from a few steps away -> call "
+                        "out to invite them closer, at most this often "
+                        "(0 = off)")
+    g.add_argument("--idle-glance-secs", type=float, default=0.0,
+                   help="session mode: with nobody in frame, a small "
+                        "random head glance about this often, between "
+                        "attract moves (0 = off)")
+    g.add_argument("--onboarding", default="quick", choices=list(ONBOARDING),
+                   help="how a newcomer starts: quick (one question -- "
+                        "which language, what level -- then a lesson; "
+                        "nothing stored unless they ask to be remembered) "
+                        "or full (the T17.4 interview before any lesson)")
     g.add_argument("--persona", default="plain", choices=list(PERSONAS),
                    help="booth: a few gentle quips and the wishlist "
                         "question; plain: none")
